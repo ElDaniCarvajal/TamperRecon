@@ -96,9 +96,15 @@
         if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'){
           out[k] = v;
         } else if (typeof v === 'function'){
-          out[k] = '[function]';
+          out[k] = v.toString();
+        } else if (typeof v === 'object'){
+          try {
+            out[k] = JSON.stringify(v);
+          } catch {
+            out[k] = String(v);
+          }
         } else {
-          out[k] = '[object]';
+          out[k] = String(v);
         }
       }catch(e){}
     });

@@ -246,19 +246,23 @@
   }
   const staticPaths = [
     '/.env','/.env.local','/.env.production','/.env.prod','/.env.example',
-    '/.git/HEAD','/.git/config','/.gitignore','/.svn/entries','/.hg','/.bzr',
+    '/.git/HEAD','/.git/config','/.gitignore','/.gitlab-ci.yml','/.github/workflows/',
+    '/.svn/entries','/.hg','/.bzr',
     '/.htpasswd','/.htaccess','/.DS_Store',
     '/wp-config.php','/wp-config.php.bak','/config.php','/config.php.bak',
     '/.ftpconfig','/ftpconfig','/sftp-config.json',
     '/.npmrc','/.yarnrc','/composer.json','/composer.lock',
     '/package.json','/package-lock.json','/yarn.lock',
-    '/docker-compose.yml','/Dockerfile','/.docker/config.json',
+    '/docker-compose.yml','/docker-compose.yaml','/docker-compose.dev.yml','/docker-compose.prod.yml',
+    '/docker-compose.production.yml','/docker-compose.test.yml','/docker-compose.override.yml',
+    '/docker-compose.ci.yml','/docker-compose.staging.yml','/Dockerfile','/.docker/config.json',
     '/.aws/credentials','/id_rsa','/.ssh/id_rsa','/.ssh/known_hosts',
     '/.git-credentials','/.ssh/config','/wp-config-sample.php','/config.yaml','/config.yml',
     '/settings.py','/localsettings.php','/sites/default/settings.php',
     '/db.sqlite','/database.sqlite','/debug.log','/storage/debug.log',
     '/swagger','/swagger.json','/openapi.json','/api-docs','/v3/api-docs',
     '/graphql','/actuator','/actuator/health','/metrics','/health',
+    '/security.txt','/robots.txt','/sitemap.xml','/ads.txt',
     '/server-status','/server-info','/.babelrc','/.eslintrc','/.eslintrc.json',
     '/backup/','/backups/','/.backup/','/.backups/','/public_html/','/www/','/wwwroot/','/htdocs/'
   ];

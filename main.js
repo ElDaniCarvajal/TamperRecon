@@ -387,7 +387,10 @@
     if (tabElsF.chk.gql.checked) list.push(...buildGraphQLEndpoints());
     return unique(list.map(p=>mkAbs(p)).filter(Boolean).filter(sameOrigin));
   }
-  function sfAddFinding(url,status,note){
+  function sfAddFinding(url,status,note,body=''){
+    if (status===401 || status===403 || /<form[^>]*>([\s\S]*?<input[^>]*type=["']?password)/i.test(body)) {
+      note += (note?'; ':'') + 'Requires auth';
+    }
     const fam = family(status);
     sf.findings.push({ url, file:url, line:'', status, note, family: fam, session: sf.session });
     sfRender();
@@ -415,7 +418,7 @@
           } else if (isGQL && code===400){ note='GraphQL detectado (400 típico)'; }
           else if (isGQL && code===405){ note='GraphQL podría requerir POST (405)'; }
           if (res.finalUrl && res.finalUrl !== u) note += (note?'; ':'') + `redirigido a ${res.finalUrl}`;
-          sfAddFinding(u,code,note);
+          sfAddFinding(u,code,note,res.responseText);
         },
         onerror: ()=>{ if (session!==sf.session) return; sfAddFinding(u,0,'Error de red'); },
         ontimeout: ()=>{ if (session!==sf.session) return; sfAddFinding(u,0,'Timeout'); },

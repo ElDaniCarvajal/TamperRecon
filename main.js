@@ -464,6 +464,7 @@ tabJS.innerHTML = `
       <label><input type="checkbox" id="js_include_third"> Incluir externos</label>
       <label><input type="checkbox" id="js_scan_inline" checked> Incluir inline</label>
       <label><input type="checkbox" id="js_ignore_min" checked> Ignorar *.min.js</label>
+      <label><input type="checkbox" id="js_capture_net"> Capturar fetch/XHR</label>
     </div>
     <div id="js_filters" class="ptk-grid"></div>
     <div class="ptk-grid">
@@ -614,6 +615,7 @@ const jsRefs = {
   includeThird: tabJS.querySelector('#js_include_third'),
   scanInline:   tabJS.querySelector('#js_scan_inline'),
   ignoreMin:    tabJS.querySelector('#js_ignore_min'),
+  captureNet:   tabJS.querySelector('#js_capture_net'),
   filterBox:    tabJS.querySelector('#js_filters'),
   domChk:       tabJS.querySelector('#js_domains'),
   scopeSel:     tabJS.querySelector('#js_scope'),
@@ -664,6 +666,53 @@ function addDomainFinding(file, line, host, evidence){
   jh.domainsSet.add(key);
   jh.findings.push({ file, line, type:'Domain', value:evidence||host, host, session: jh.session });
 }
+
+function jsScanCaptured(file, text){
+  const lines = (text || '').split(/\r?\n/);
+  PATTERNS.forEach(p => {
+    lines.forEach((ln,i)=>{
+      const m = ln.match(p.rx);
+      if (m) m.forEach(val=> jh.findings.push({ file, type:p.label, value:val, line:i, session: jh.session }));
+    });
+  });
+  if (jsRefs.domChk.checked){
+    lines.forEach((ln,i)=>{
+      findDomainsInString(ln,(host,e)=>addDomainFinding(file,i,host,e));
+    });
+  }
+}
+function jsProcessCapture(src, headers, body){
+  if (headers) jsScanCaptured(src+' [hdr]', headers);
+  if (body) jsScanCaptured(src+' [body]', body);
+  jsRender();
+}
+const _origFetch = window.fetch;
+window.fetch = async function(...args){
+  const res = await _origFetch.apply(this,args);
+  if (jsRefs.captureNet && jsRefs.captureNet.checked){
+    try {
+      const url = typeof args[0]==='string'? args[0] : (args[0] && args[0].url) || '';
+      const clone = res.clone();
+      const hdrs = Array.from(clone.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n');
+      clone.text().then(body=>jsProcessCapture('fetch '+url,hdrs,body)).catch(()=>{});
+    } catch(e){}
+  }
+  return res;
+};
+const _origSend = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.send = function(...args){
+  this.addEventListener('load', function(){
+    if (jsRefs.captureNet && jsRefs.captureNet.checked){
+      try {
+        const hdrs = this.getAllResponseHeaders();
+        const body = this.responseText || '';
+        const url = this.responseURL || '';
+        jsProcessCapture('xhr '+url,hdrs,body);
+      } catch(e){}
+    }
+  });
+  return _origSend.apply(this,args);
+};
 
 // === jsScanText (dominios solo en strings/comentarios + anti-ruido en minificados externos) ===
 function jsScanText(file, text) {

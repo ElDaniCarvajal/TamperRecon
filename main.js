@@ -1311,6 +1311,15 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   const RX_CF_R2   = /https?:\/\/([a-z0-9-]+)\.r2\.cloudflarestorage\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
   const RX_OSS_VHOST = /https?:\/\/([a-z0-9.\-]+)\.oss-([a-z0-9-]+)\.aliyuncs\.com\/[^\s"'<>]*/gi;
   const RX_OSS_PATH  = /https?:\/\/oss-([a-z0-9-]+)\.aliyuncs\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
+  const RX_WASABI_VHOST = /https?:\/\/([a-z0-9.\-]+)\.s3(?:[\.-]([a-z0-9-]+))?\.wasabisys\.com\/[^\s"'<>]*/gi;
+  const RX_WASABI_PATH  = /https?:\/\/s3(?:[\.-]([a-z0-9-]+))?\.wasabisys\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
+  const RX_B2_VHOST = /https?:\/\/([a-z0-9.\-]+)\.s3\.([a-z0-9-]+)\.backblazeb2\.com\/[^\s"'<>]*/gi;
+  const RX_B2_PATH  = /https?:\/\/s3\.([a-z0-9-]+)\.backblazeb2\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
+  const RX_B2_NATIVE= /https?:\/\/f[0-9]{3,}\.backblazeb2\.com\/file\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
+  const RX_LINODE_VHOST = /https?:\/\/([a-z0-9.\-]+)\.([a-z0-9-]+)\.linodeobjects\.com\/[^\s"'<>]*/gi;
+  const RX_LINODE_PATH  = /https?:\/\/([a-z0-9-]+)\.linodeobjects\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
+  const RX_VULTR_VHOST = /https?:\/\/([a-z0-9.\-]+)\.([a-z0-9-]+)\.vultrobjects\.com\/[^\s"'<>]*/gi;
+  const RX_VULTR_PATH  = /https?:\/\/([a-z0-9-]+)\.vultrobjects\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
 
   function scanTextForBuckets(text, source, srcUrl){
     const out = [];
@@ -1329,6 +1338,15 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
     while ((m = RX_CF_R2.exec(text))) push(m,'R2','path',{account:m[1],bucket:m[2]});
     while ((m = RX_OSS_VHOST.exec(text))) push(m,'OSS','vhost',{bucket:m[1],region:m[2]});
     while ((m = RX_OSS_PATH.exec(text)))  push(m,'OSS','path',{bucket:m[2],region:m[1]});
+    while ((m = RX_WASABI_VHOST.exec(text))) push(m,'WASABI','vhost',{bucket:m[1],region:m[2]});
+    while ((m = RX_WASABI_PATH.exec(text)))  push(m,'WASABI','path',{bucket:m[2],region:m[1]});
+    while ((m = RX_B2_VHOST.exec(text)))   push(m,'B2','vhost',{bucket:m[1],region:m[2]});
+    while ((m = RX_B2_PATH.exec(text)))    push(m,'B2','path',{bucket:m[2],region:m[1]});
+    while ((m = RX_B2_NATIVE.exec(text)))  push(m,'B2','native',{bucket:m[1]});
+    while ((m = RX_LINODE_VHOST.exec(text))) push(m,'LINODE','vhost',{bucket:m[1],region:m[2]});
+    while ((m = RX_LINODE_PATH.exec(text)))  push(m,'LINODE','path',{bucket:m[2],region:m[1]});
+    while ((m = RX_VULTR_VHOST.exec(text))) push(m,'VULTR','vhost',{bucket:m[1],region:m[2]});
+    while ((m = RX_VULTR_PATH.exec(text)))  push(m,'VULTR','path',{bucket:m[2],region:m[1]});
     while ((m = RX_AZURE_BL.exec(text))) push(m,'AZURE','blob',{account:m[1],container:m[2]});
     while ((m = RX_AZURE_DFS.exec(text))) push(m,'AZURE','dfs',{account:m[1],container:m[2]});
     return out;
@@ -1397,6 +1415,26 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
       if (!c.region || !c.bucket) return null;
       if (c.style==='vhost') return `https://${c.bucket}.oss-${c.region}.aliyuncs.com/?list-type=2`;
       if (c.style==='path')  return `https://oss-${c.region}.aliyuncs.com/${c.bucket}?list-type=2`;
+      return null;
+    } else if (c.provider==='WASABI'){
+      const r = c.region ? `.${c.region}` : '';
+      if (c.style==='vhost') return `https://${c.bucket}.s3${r}.wasabisys.com/?list-type=2`;
+      if (c.style==='path')  return `https://s3${r}.wasabisys.com/${c.bucket}?list-type=2`;
+      return null;
+    } else if (c.provider==='B2'){
+      if (!c.region || !c.bucket) return null;
+      if (c.style==='vhost') return `https://${c.bucket}.s3.${c.region}.backblazeb2.com/?list-type=2`;
+      if (c.style==='path')  return `https://s3.${c.region}.backblazeb2.com/${c.bucket}?list-type=2`;
+      return null;
+    } else if (c.provider==='LINODE'){
+      if (!c.region || !c.bucket) return null;
+      if (c.style==='vhost') return `https://${c.bucket}.${c.region}.linodeobjects.com/?list-type=2`;
+      if (c.style==='path')  return `https://${c.region}.linodeobjects.com/${c.bucket}?list-type=2`;
+      return null;
+    } else if (c.provider==='VULTR'){
+      if (!c.region || !c.bucket) return null;
+      if (c.style==='vhost') return `https://${c.bucket}.${c.region}.vultrobjects.com/?list-type=2`;
+      if (c.style==='path')  return `https://${c.region}.vultrobjects.com/${c.bucket}?list-type=2`;
       return null;
     } else if (c.provider==='AZURE'){
       if (c.style==='blob' || c.style==='dfs'){

@@ -855,7 +855,10 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   function crStart(){
     if (cr.started) return;
     cr.started=true; cr.paused=false; cr.session++; cr.inFlight=0; cr.q.length=0; cr.pages.length=0; cr.assets.length=0; cr.seen.clear();
-    crRefs.results.innerHTML=''; crawlEnqueue(location.href); crRefs.status.textContent = 'Iniciando…'; crPump();
+    crRefs.results.innerHTML='';
+    crawlEnqueue(location.href);
+    ['/robots.txt','/sitemap.xml','/security.txt','/ads.txt'].forEach(p=>crawlEnqueue(location.origin+p));
+    crRefs.status.textContent = 'Iniciando…'; crPump();
   }
   function crPause(){ if (!cr.started) return; cr.paused = !cr.paused; crRefs.pause.textContent = cr.paused?'Reanudar':'Pausar'; if (!cr.paused) crPump(); }
   function crClear(){ cr.paused=true; cr.started=false; cr.session++; cr.inFlight=0; cr.q.length=0; cr.pages.length=0; cr.assets.length=0; cr.seen.clear(); crRefs.results.innerHTML=''; crRefs.status.textContent='En espera…'; crRefs.pause.textContent='Pausar'; crSetProgress(); }

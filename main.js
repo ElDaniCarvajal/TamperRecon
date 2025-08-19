@@ -129,6 +129,7 @@
       <div class="ptk-tab" data-tab="versions">Versions</div>
       <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
       <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
+      <div class="ptk-tab" data-tab="hooks">Hooks</div>
     </div>
     <section id="tab_files"></section>
     <section id="tab_js" style="display:none"></section>
@@ -136,6 +137,7 @@
     <section id="tab_versions" style="display:none"></section>
     <section id="tab_fuzzer" style="display:none"></section>
     <section id="tab_buckets" style="display:none"></section>
+    <section id="tab_hooks" style="display:none"></section>
   `;
   root.appendChild(panel);
 
@@ -175,7 +177,7 @@
   };
   const tabsEl = panel.querySelector('#tabs');
   function showTab(name){
-    ['files','js','crawler','versions','fuzzer','buckets'].forEach(t=>{
+    ['files','js','crawler','versions','fuzzer','buckets','hooks'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
       const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
@@ -1507,6 +1509,67 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   bkRefs.scan.onclick=bkScan;
   bkRefs.clear.onclick=()=>{ bk.findings.length=0; bk.candidates.length=0; bk.resSet.clear(); bk.candSet.clear(); bkRefs.results.innerHTML=''; bkRefs.status.textContent='En espera…'; pillBkTxt.textContent='—'; pillBkBar.style.width='0%'; };
   bkRefs.csv.onclick=()=>{ const head=['provider','bucket','account','container','region','file','line','url','status','note']; csvDownload(`buckets_${nowStr()}.csv`, head, bk.findings.map(x=>({provider:x.provider||'',bucket:x.bucket||'',account:x.account||'',container:x.container||'',region:x.region||'',file:x.file||'',line:(typeof x.line==='number'?(x.line+1):''),url:x.url,status:x.status,note:x.note}))); };
+
+  /* ============================
+     HOOKS LOGGER
+  ============================ */
+  const tabHooks = panel.querySelector('#tab_hooks');
+  tabHooks.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">Hooks Log</div>
+        <div>
+          <button id="hk_clear" class="ptk-btn">Clear</button>
+          <button id="hk_copy" class="ptk-btn">Copiar JSON</button>
+          <button id="hk_csv" class="ptk-btn">CSV</button>
+        </div>
+      </div>
+      <div id="hk_results"></div>
+    </div>
+  `;
+  const hkRefs = {
+    clear: tabHooks.querySelector('#hk_clear'),
+    copy:  tabHooks.querySelector('#hk_copy'),
+    csv:   tabHooks.querySelector('#hk_csv'),
+    results: tabHooks.querySelector('#hk_results')
+  };
+  const hk = { logs: [] };
+  function hkRender(){
+    hkRefs.results.innerHTML='';
+    hk.logs.forEach(l=>{
+      const div=document.createElement('div'); div.className='ptk-row';
+      div.innerHTML = `<div><b>${l.type}</b> ${l.key||''}</div><div class="ptk-code" style="opacity:.8">${l.timestamp}</div>`;
+      hkRefs.results.appendChild(div);
+    });
+  }
+  function hkLog(type,key,stack){
+    hk.logs.push({ timestamp:new Date().toISOString(), type, key:key||'', url:location.href, stack:stack||'' });
+    hkRender();
+  }
+  hkRefs.clear.onclick=()=>{ hk.logs.length=0; hkRender(); };
+  hkRefs.copy.onclick=()=>{ const out=JSON.stringify(hk.logs,null,2); clip(out); hkRefs.copy.textContent='¡Copiado!'; setTimeout(()=>hkRefs.copy.textContent='Copiar JSON',1200); };
+  hkRefs.csv.onclick=()=>{ const head=['timestamp','type','key','url','stack']; const rows=hk.logs.map(x=>({timestamp:x.timestamp,type:x.type,key:x.key,url:x.url,stack:x.stack})); csvDownload(`hooks_${nowStr()}.csv`, head, rows); };
+
+  ['localStorage','sessionStorage'].forEach(storeName=>{
+    const store=window[storeName];
+    if(!store) return;
+    ['getItem','setItem','removeItem'].forEach(method=>{
+      const orig=store[method];
+      store[method]=function(...args){
+        try{ hkLog(`${storeName}.${method}`, args[0], new Error().stack); }catch{}
+        return orig.apply(this,args);
+      };
+    });
+  });
+  const dcDesc = Object.getOwnPropertyDescriptor(Document.prototype,'cookie');
+  if(dcDesc && dcDesc.set){
+    const origSet = dcDesc.set;
+    dcDesc.set = function(v){
+      try{ const k=String(v||'').split('=')[0]; hkLog('document.cookie', k, new Error().stack); }catch{}
+      return origSet.call(this,v);
+    };
+    Object.defineProperty(Document.prototype,'cookie', dcDesc);
+  }
 
   /* ============================
      AUTOSTARTS (opcionales)

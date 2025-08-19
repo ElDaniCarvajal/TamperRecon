@@ -88,6 +88,27 @@ function scanLocalStorage(){
   }
 }
 
+function scanSessionStorage(){
+  if (!global.sessionStorage) return;
+  for (let i=0; i<global.sessionStorage.length; i++){
+    const k = global.sessionStorage.key(i);
+    const v = global.sessionStorage.getItem(k);
+    if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog2({ type:'sessionStorage', key:k, data:v });
+  }
+}
+
+function scanCookies(){
+  if (!global.document || !global.document.cookie) return;
+  const all = global.document.cookie.split(';');
+  all.forEach(c => {
+    if (!c) return;
+    const idx = c.indexOf('=');
+    const k = idx>=0 ? c.slice(0,idx).trim() : c.trim();
+    const v = idx>=0 ? decodeURIComponent(c.slice(idx+1)) : '';
+    if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog2({ type:'cookie', key:k, data:v });
+  });
+}
+
 global.AC_DATA = { foo:{ token:'abc123' }, other:'none' };
 global.localStorage = {
   _data:{ apiKey:'token-XYZ', other:'value' },
@@ -95,12 +116,23 @@ global.localStorage = {
   key(i){ return Object.keys(this._data)[i]; },
   getItem(k){ return this._data[k]; }
 };
+global.sessionStorage = {
+  _data:{ sessionToken:'abc-session', other:'v' },
+  length: 2,
+  key(i){ return Object.keys(this._data)[i]; },
+  getItem(k){ return this._data[k]; }
+};
+global.document = { cookie:'apiKey=secret123; other=val' };
 
 scanACData();
 scanLocalStorage();
+scanSessionStorage();
+scanCookies();
 
 assert.deepStrictEqual(logs2[0], { type:'AC_DATA', key:'AC_DATA.foo.token', data:'abc123' });
 assert.deepStrictEqual(logs2[1], { type:'localStorage', key:'apiKey', data:'token-XYZ' });
-assert.strictEqual(logs2.length,2);
+assert.deepStrictEqual(logs2[2], { type:'sessionStorage', key:'sessionToken', data:'abc-session' });
+assert.deepStrictEqual(logs2[3], { type:'cookie', key:'apiKey', data:'secret123' });
+assert.strictEqual(logs2.length,4);
 
 console.log('Runtime scan tests passed');

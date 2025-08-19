@@ -42,6 +42,10 @@
   const famColor = f => f==='2'? '#22c55e' : f==='3'? '#facc15' : (f==='4'||f==='5')? '#ef4444' : '#cbd5e1';
   const nowStr = () => new Date().toISOString().replace(/[:.]/g,'-');
   const clip = text => { try { if (typeof GM_setClipboard==='function') GM_setClipboard(text, 'text'); } catch(e){} };
+  const looksLike404 = txt => {
+    const t = String(txt||'').slice(0,400).toLowerCase();
+    return /(404|not found|page not found|p[aá]gina no encontrada|no encontrado|does not exist)/.test(t);
+  };
   const IGNORE_EXT = /\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff|woff2?|eot|ttf|otf|css|map|mp4|webm|mp3|wav|ogg|m4a|mov|avi)(\?|#|$)/i;
   const PAGE_LIKE  = /\.(?:html?|php|aspx?|jsp|cfm|md|txt|xml|json)(\?|#|$)/i;
   const SCRIPT_LIKE= /\.(?:js)(\?|#|$)/i;
@@ -250,6 +254,8 @@
     '/package.json','/package-lock.json','/yarn.lock',
     '/docker-compose.yml','/Dockerfile','/.docker/config.json',
     '/.aws/credentials','/id_rsa','/.ssh/id_rsa','/.ssh/known_hosts',
+    '/.git-credentials','/.ssh/config','/wp-config-sample.php','/config.yaml','/config.yml',
+    '/settings.py','/localsettings.php','/sites/default/settings.php',
     '/db.sqlite','/database.sqlite','/debug.log','/storage/debug.log',
     '/swagger','/swagger.json','/openapi.json','/api-docs','/v3/api-docs',
     '/graphql','/actuator','/actuator/health','/metrics','/health',
@@ -396,17 +402,23 @@
         headers: isGQL ? {'Accept':'application/json'} : {'Range':'bytes=0-200','Cache-Control':'no-cache'},
         onload: res=>{
           if (session!==sf.session) return;
-          const code = res.status; let note = '';
+          let code = res.status; let note = '';
+          const ctype = ((res.responseHeaders||'').match(/content-type:\s*([^\n\r]+)/i)||[])[1]?.trim()||'';
           if (code>=300 && code<400){
             const m = (res.responseHeaders||'').match(/location:\s*(.+)/i); note = m? m[1].trim() : '';
           } else if (code===200 || code===206){
             const body = (res.responseText||'').slice(0,400);
-            if (isGQL){ if (/__typename|__schema|GraphQL|errors/i.test(body)) note='posible GraphQL activo'; }
-            else if (/\b(AWS|secret|token|password|DB_|DATABASE|OPENAPI|swagger|ssh|PRIVATE|BEGIN|env|dotenv|config|zip|tar|gzip)\b/i.test(body)){ note='posible contenido sensible'; }
+            if (looksLike404(body)) { code = 404; note='Soft 404'; }
+            else if (isGQL){ if (/__typename|__schema|GraphQL|errors/i.test(body)) note='posible GraphQL activo'; }
+            else if (/\b(AWS|secret|token|password|passwd|apikey|credential|private|jwt|DB_|DATABASE|OPENAPI|swagger|ssh|PRIVATE|BEGIN|env|dotenv|config|zip|tar|gzip|secret_key)\b/i.test(body)){ note='posible contenido sensible'; }
+            if (/text\//i.test(ctype) && !/charset=/i.test(ctype)) note += (note?'; ':'') + 'sin charset';
           } else if (isGQL && code===400){ note='GraphQL detectado (400 típico)'; }
           else if (isGQL && code===405){ note='GraphQL podría requerir POST (405)'; }
+          if (res.finalUrl && res.finalUrl !== u) note += (note?'; ':'') + `redirigido a ${res.finalUrl}`;
           sfAddFinding(u,code,note);
         },
+        onerror: ()=>{ if (session!==sf.session) return; sfAddFinding(u,0,'Error de red'); },
+        ontimeout: ()=>{ if (session!==sf.session) return; sfAddFinding(u,0,'Timeout'); },
         onloadend: ()=>{ if (session!==sf.session) return; sf.inFlight--; sf.done++; sfUpdateStatus(); setTimeout(sfPump, FILES.REQ_DELAY_MS); }
       });
     }
@@ -802,12 +814,13 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
     pillCrTxt.textContent = `${done}/${total} • activos=${cr.inFlight}${cr.paused?' • PAUSADO':''}`;
     pillCrBar.style.width = pct + '%';
   }
-  function crRenderRow(u, status, ctype, title){
+  function crRenderRow(u, status, ctype, title, note){
     const fam = family(status);
     const div = document.createElement('div'); div.className='ptk-row';
     const t = title ? ` · <b>${title}</b>` : '';
+    const n = note ? ` · ${note}` : '';
     div.innerHTML = `<div><a class="ptk-link" href="${u}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${u}</a></div>
-                     <div class="ptk-code" style="color:${famColor(fam)}">HTTP ${status} · ${ctype||'—'}${t}</div>`;
+                     <div class="ptk-code" style="color:${famColor(fam)}">HTTP ${status} · ${ctype||'—'}${t}${n}</div>`;
     crRefs.results.appendChild(div);
   }
   function crPump(){
@@ -819,13 +832,20 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
         method:'GET', url:u, timeout: CRAWL.TIMEOUT_MS, headers:{'Cache-Control':'no-cache','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.5'},
         onload: res=>{
           if (session!==cr.session) return;
-          const code = res.status; const ctype = ((res.responseHeaders||'').match(/content-type:\s*([^\n\r]+)/i)||[])[1]?.trim()||'';
+          let code = res.status; const ctype = ((res.responseHeaders||'').match(/content-type:\s*([^\n\r]+)/i)||[])[1]?.trim()||'';
+          const body = res.responseText||'';
+          if (code>=200 && code<300 && looksLike404(body)) code=404;
           let title='';
-          if (/text\/html/i.test(ctype)){ const m = (res.responseText||'').match(/<title[^>]*>([^<]*)<\/title>/i); if (m) title = m[1].trim().slice(0,140); }
-          cr.pages.push({ url:u, file:u, line:'', status:code, contentType: ctype, title, session: cr.session });
-          crRenderRow(u, code, ctype, title);
-          if (code>=200 && code<400){ crawlExtract(res.responseText||'', u, ctype); }
+          if (/text\/html/i.test(ctype)){ const m = body.match(/<title[^>]*>([^<]*)<\/title>/i); if (m) title = m[1].trim().slice(0,140); }
+          let note='';
+          if (/text\//i.test(ctype) && !/charset=/i.test(ctype)) note='sin charset';
+          if (res.finalUrl && res.finalUrl !== u) note += (note?'; ':'') + `redirigido a ${res.finalUrl}`;
+          cr.pages.push({ url:u, file:u, line:'', status:code, contentType: ctype, title, note, session: cr.session });
+          crRenderRow(u, code, ctype, title, note);
+          if (code>=200 && code<400){ crawlExtract(body, u, ctype); }
         },
+        onerror: ()=>{ if (session!==cr.session) return; cr.pages.push({url:u,file:u,line:'',status:0,contentType:'',title:'',note:'Error de red',session:cr.session}); crRenderRow(u,0,'','', 'Error de red'); },
+        ontimeout: ()=>{ if (session!==cr.session) return; cr.pages.push({url:u,file:u,line:'',status:0,contentType:'',title:'',note:'Timeout',session:cr.session}); crRenderRow(u,0,'','', 'Timeout'); },
         onloadend: ()=>{ if (session!==cr.session) return; cr.inFlight--; crSetProgress(); setTimeout(crPump, CRAWL.DELAY_MS); }
       });
     }
@@ -841,7 +861,7 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   function crClear(){ cr.paused=true; cr.started=false; cr.session++; cr.inFlight=0; cr.q.length=0; cr.pages.length=0; cr.assets.length=0; cr.seen.clear(); crRefs.results.innerHTML=''; crRefs.status.textContent='En espera…'; crRefs.pause.textContent='Pausar'; crSetProgress(); }
   crRefs.start.onclick=crStart; crRefs.pause.onclick=crPause; crRefs.clear.onclick=crClear;
   crRefs.copy.onclick=()=>{ const out=JSON.stringify({pages:cr.pages, assets:unique(cr.assets)}, null, 2); clip(out); crRefs.copy.textContent='¡Copiado!'; setTimeout(()=>crRefs.copy.textContent='Copiar JSON',1200); };
-  crRefs.csv.onclick=()=>{ const head=['file','line','url','status','contentType','title']; csvDownload(`crawl_pages_${nowStr()}.csv`, head, cr.pages.map(p=>({file:p.file,line:p.line,url:p.url,status:p.status,contentType:p.contentType,title:p.title||''}))); };
+  crRefs.csv.onclick=()=>{ const head=['file','line','url','status','contentType','title','note']; csvDownload(`crawl_pages_${nowStr()}.csv`, head, cr.pages.map(p=>({file:p.file,line:p.line,url:p.url,status:p.status,contentType:p.contentType,title:p.title||'',note:p.note||''}))); };
 
    /* ============================
      VERSIONS (cola única, anti-stall; headers 1x/host; externos solo si referenciados)
@@ -1294,7 +1314,7 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
     while ((m = RX_AZURE_DFS.exec(text))) push(m,'AZURE','dfs',{account:m[1],container:m[2]});
     return out;
   }
-  function collectBucketCandidates(){
+  async function collectBucketCandidates(){
     bk.candSet.clear();
     const out = [];
     function addC(c){
@@ -1323,23 +1343,24 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
     const arr = unique([...jsUrls]).filter(u=>/\.js(\?|#|$)/i.test(u));
     bk.det.total = arr.length; bk.det.done=0; bk.det.active=0; bkSetProg('detect');
 
-    return new Promise(resolve=>{
-      let i=0;
-      function pump(){
-        if (i>=arr.length && bk.det.active===0) return resolve(out);
-        while (bk.det.active<BUCKS.JS_DETECT_MAX_CONC && i<arr.length){
-          const u = arr[i++]; bk.det.active++; bkSetProg('detect');
-          GM_xmlhttpRequest({
-            method:'GET', url:u, timeout:BUCKS.TIMEOUT_MS,
-            onload: res=>{
-              const text = res.responseText||''; scanTextForBuckets(text, 'JS', u).forEach(addC);
-            },
-            onloadend: ()=>{ bk.det.active--; bk.det.done++; bkSetProg('detect'); pump(); }
-          });
-        }
-      }
-      pump();
-    }).then(()=>out);
+    async function fetchJS(u){
+      bk.det.active++; bkSetProg('detect');
+      return new Promise(resolve=>{
+        GM_xmlhttpRequest({
+          method:'GET', url:u, timeout:BUCKS.TIMEOUT_MS,
+          onload: res=>{ const text = res.responseText||''; scanTextForBuckets(text, 'JS', u).forEach(addC); },
+          onloadend: ()=>{ bk.det.active--; bk.det.done++; bkSetProg('detect'); resolve(); },
+          onerror: ()=>{ bk.det.active--; bk.det.done++; bkSetProg('detect'); resolve(); },
+          ontimeout: ()=>{ bk.det.active--; bk.det.done++; bkSetProg('detect'); resolve(); }
+        });
+      });
+    }
+
+    for (let i=0;i<arr.length;i+=BUCKS.JS_DETECT_MAX_CONC){
+      const slice = arr.slice(i, i+BUCKS.JS_DETECT_MAX_CONC);
+      await Promise.all(slice.map(fetchJS));
+    }
+    return out;
   }
   function bucketListingURL(c){
     if (c.provider==='S3'){

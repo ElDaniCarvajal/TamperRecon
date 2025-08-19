@@ -116,6 +116,8 @@
   let rsRender;
   let updateRuntimeBadge = ()=>{};
   let runtimeNotify = ()=>{};
+  let runtimeAlerted = false;
+  let capturePostMessage = true;
   function logEvent(type, details){
     eventLogs.push(Object.assign({ time: new Date().toISOString(), type }, details));
   }
@@ -258,7 +260,10 @@
   runtimeNotify = function(){
     panel.style.display = '';
     showTab('runtime');
-    if (typeof alert === 'function') alert('Runtime secret found');
+    if (!runtimeAlerted && typeof alert === 'function'){
+      runtimeAlerted = true;
+      alert('Runtime secret found');
+    }
   };
   tabsEl.addEventListener('click', (e)=>{
     const t = e.target && e.target.closest('.ptk-tab');
@@ -892,6 +897,7 @@ tabRuntime.innerHTML = `
         <button id="rs_clear" class="ptk-btn">Clear</button>
         <button id="rs_copy" class="ptk-btn">Copiar JSON</button>
         <button id="rs_dl" class="ptk-btn">Descargar TXT</button>
+        <button id="rs_pm_toggle" class="ptk-btn">Pausar postMessage</button>
       </div>
     </div>
     <div id="rs_results"></div>
@@ -901,6 +907,7 @@ const rsRefs = {
   clear: tabRuntime.querySelector('#rs_clear'),
   copy:  tabRuntime.querySelector('#rs_copy'),
   dl:    tabRuntime.querySelector('#rs_dl'),
+  pmToggle: tabRuntime.querySelector('#rs_pm_toggle'),
   results: tabRuntime.querySelector('#rs_results')
 };
 rsRender = function(){
@@ -928,6 +935,10 @@ rsRefs.dl.onclick=()=>{
   const data = { logs: runtimeLogs, globals: getAllGlobals() };
   const out = JSON.stringify(data, null, 2);
   textDownload(`runtime_secrets_${nowStr()}.txt`, out);
+};
+rsRefs.pmToggle.onclick=()=>{
+  capturePostMessage = !capturePostMessage;
+  rsRefs.pmToggle.textContent = capturePostMessage ? 'Pausar postMessage' : 'Reanudar postMessage';
 };
 
   // Hook CryptoJS AES encrypt/decrypt
@@ -999,11 +1010,11 @@ rsRefs.dl.onclick=()=>{
     const origPM = window.postMessage;
     if (typeof origPM === 'function'){
       window.postMessage = function(message, targetOrigin, transfer){
-        try{ addRuntimeLog({ type:'postMessage.send', data:String(message) }); }catch(e){}
+        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:String(message) }); }catch(e){}
         return origPM.apply(this, arguments);
       };
       window.addEventListener && window.addEventListener('message', ev=>{
-        try{ addRuntimeLog({ type:'postMessage.receive', data:String(ev.data), origin: ev.origin }); }catch(e){}
+        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:String(ev.data), origin: ev.origin }); }catch(e){}
       });
     }
   })();

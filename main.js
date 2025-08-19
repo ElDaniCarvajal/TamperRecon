@@ -87,17 +87,38 @@
     for (let i=0;i<idx;i++) if (text[i] === '\n') n++;
     return n;
   }
+  function getAllGlobals(){
+    const out = {};
+    const props = Object.getOwnPropertyNames(window);
+    props.forEach(k=>{
+      try{
+        const v = window[k];
+        if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'){
+          out[k] = v;
+        } else if (typeof v === 'function'){
+          out[k] = '[function]';
+        } else {
+          out[k] = '[object]';
+        }
+      }catch(e){}
+    });
+    return out;
+  }
 
   const eventLogs = [];
   const runtimeLogs = [];
   let rsRender;
+  let updateRuntimeBadge = ()=>{};
+  let runtimeNotify = ()=>{};
   function logEvent(type, details){
     eventLogs.push(Object.assign({ time: new Date().toISOString(), type }, details));
   }
   function addRuntimeLog(rec){
     runtimeLogs.push(rec);
     logEvent('runtime', rec);
+    updateRuntimeBadge();
     if (typeof rsRender === 'function') rsRender();
+    if (typeof runtimeNotify === 'function') runtimeNotify();
   }
   const origEval = window.eval;
   window.eval = function(str){
@@ -216,6 +237,11 @@
     btnToggle.textContent = hide ? 'Ocultar' : 'Mostrar';
   };
   const tabsEl = panel.querySelector('#tabs');
+  const runtimeTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="runtime"]');
+  updateRuntimeBadge = function(){
+    if (runtimeTabBtn) runtimeTabBtn.textContent = `Runtime Secrets (${runtimeLogs.length})`;
+  };
+  updateRuntimeBadge();
   function showTab(name){
     ['files','js','runtime','crawler','versions','fuzzer','buckets'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
@@ -223,6 +249,11 @@
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
     });
   }
+  runtimeNotify = function(){
+    panel.style.display = '';
+    showTab('runtime');
+    if (typeof alert === 'function') alert('Runtime secret found');
+  };
   tabsEl.addEventListener('click', (e)=>{
     const t = e.target && e.target.closest('.ptk-tab');
     if (!t) return;
@@ -887,7 +918,11 @@ rsRender = function(){
 rsRender();
 rsRefs.clear.onclick=()=>{ runtimeLogs.length=0; rsRender(); };
 rsRefs.copy.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); clip(out); rsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>rsRefs.copy.textContent='Copiar JSON',1200); };
-rsRefs.dl.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); textDownload(`runtime_secrets_${nowStr()}.txt`, out); };
+rsRefs.dl.onclick=()=>{
+  const data = { logs: runtimeLogs, globals: getAllGlobals() };
+  const out = JSON.stringify(data, null, 2);
+  textDownload(`runtime_secrets_${nowStr()}.txt`, out);
+};
 
   // Hook CryptoJS AES encrypt/decrypt
   (function(){

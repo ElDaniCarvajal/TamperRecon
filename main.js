@@ -1174,7 +1174,7 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
         </label>
       </div>
       <div class="ptk-grid">
-        <label>Seeds extra (coma): <input type="text" id="fz_seeds" placeholder="/api,/v1,/auth,/graphql,/health"></label>
+        <label>Seeds extra (coma): <input type="text" id="fz_seeds" placeholder="/api,/api/v3,/admin,/internal,/oauth2"></label>
       </div>
       <div id="fz_status" style="margin:6px 0">En espera…</div>
       <div id="fz_results"></div>
@@ -1189,7 +1189,7 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   const fz = { started:false, paused:false, inFlight:0, idx:0, queue:[], findings:[], session:0 };
 
   function fzSeeds(){
-    const base = ['', 'api','v1','v2','auth','oauth','users','login','health','status','docs','api-docs','swagger','openapi.json','v3/api-docs','graphql'];
+    const base = ['', 'api','api/v3','api/v4','v1','v2','auth','oauth','oauth2','users','login','health','status','docs','api-docs','swagger','openapi.json','v3/api-docs','graphql','admin','internal'];
     const extras = (fzRefs.seeds.value||'').split(',').map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^\/?/,''));
     const fromDOM = [...document.querySelectorAll('a[href], [data-href]')].map(n=>n.getAttribute('href')||n.getAttribute('data-href')||'').filter(v=>/^\/(api|v\d+|auth|graphql|docs|swagger|openapi)/i.test(v)).map(v=>v.replace(/#.*/,''));
     return unique([...base, ...extras, ...fromDOM]).map(s=>'/'+s.replace(/^\/+/,''));

@@ -953,6 +953,61 @@ rsRefs.dl.onclick=()=>{
     }catch(e){}
   })();
 
+  // Hook WebSocket send/receive
+  (function(){
+    const OrigWS = window.WebSocket;
+    if (typeof OrigWS === 'function'){
+      window.WebSocket = function(...args){
+        const ws = new OrigWS(...args);
+        try{
+          const url = args[0];
+          addRuntimeLog({ type:'WS.connect', data:String(url||'') });
+          const origSend = ws.send;
+          ws.send = function(data){
+            try{ addRuntimeLog({ type:'WS.send', data:String(data) }); }catch(e){}
+            return origSend.apply(this, arguments);
+          };
+          ws.addEventListener && ws.addEventListener('message', ev=>{
+            try{ addRuntimeLog({ type:'WS.recv', data:String(ev.data) }); }catch(e){}
+          });
+        }catch(e){}
+        return ws;
+      };
+    }
+  })();
+
+  // Hook EventSource messages
+  (function(){
+    const OrigES = window.EventSource;
+    if (typeof OrigES === 'function'){
+      window.EventSource = function(...args){
+        const es = new OrigES(...args);
+        try{
+          const url = args[0];
+          addRuntimeLog({ type:'SSE.connect', data:String(url||'') });
+          es.addEventListener && es.addEventListener('message', ev=>{
+            try{ addRuntimeLog({ type:'SSE.message', data:String(ev.data) }); }catch(e){}
+          });
+        }catch(e){}
+        return es;
+      };
+    }
+  })();
+
+  // Hook postMessage send/receive
+  (function(){
+    const origPM = window.postMessage;
+    if (typeof origPM === 'function'){
+      window.postMessage = function(message, targetOrigin, transfer){
+        try{ addRuntimeLog({ type:'postMessage.send', data:String(message) }); }catch(e){}
+        return origPM.apply(this, arguments);
+      };
+      window.addEventListener && window.addEventListener('message', ev=>{
+        try{ addRuntimeLog({ type:'postMessage.receive', data:String(ev.data), origin: ev.origin }); }catch(e){}
+      });
+    }
+  })();
+
   // Scan window.AC_DATA, Web Storage and cookies for secrets
   (function(){
     const SECRET_PATTERNS = PATTERNS.filter(p=>p.key!=='URL' && p.key!=='Route');

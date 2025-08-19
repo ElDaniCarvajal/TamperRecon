@@ -125,6 +125,7 @@
     <div class="ptk-tabs" id="tabs">
       <div class="ptk-tab active" data-tab="files">Files</div>
       <div class="ptk-tab" data-tab="js">JS Hunter</div>
+      <div class="ptk-tab" data-tab="runtime">Runtime Secrets</div>
       <div class="ptk-tab" data-tab="crawler">Crawler</div>
       <div class="ptk-tab" data-tab="versions">Versions</div>
       <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
@@ -132,6 +133,7 @@
     </div>
     <section id="tab_files"></section>
     <section id="tab_js" style="display:none"></section>
+    <section id="tab_runtime" style="display:none"></section>
     <section id="tab_crawler" style="display:none"></section>
     <section id="tab_versions" style="display:none"></section>
     <section id="tab_fuzzer" style="display:none"></section>
@@ -175,7 +177,7 @@
   };
   const tabsEl = panel.querySelector('#tabs');
   function showTab(name){
-    ['files','js','crawler','versions','fuzzer','buckets'].forEach(t=>{
+    ['files','js','runtime','crawler','versions','fuzzer','buckets'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
       const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
@@ -749,6 +751,75 @@ function jsClear(){ jh.paused=true; jh.started=false; jh.session++; jh.targets=[
 jsRefs.start.onclick=jsStart; jsRefs.pause.onclick=jsPauseResume; jsRefs.clear.onclick=jsClear;
 jsRefs.copy.onclick=()=>{ const current=jh.findings.filter(f=>f.session===jh.session); const out=JSON.stringify(current,null,2); clip(out); jsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>jsRefs.copy.textContent='Copiar JSON',1200); };
 jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session).map(r=>({file:r.file,line: (typeof r.line==='number'?(r.line+1):''),type:r.type,value:r.value,host:r.host||''})); const head=['file','line','type','value','host']; csvDownload(`js_hunter_${nowStr()}.csv`, head, rows); };
+
+  /* ============================
+     RUNTIME SECRETS
+  ============================ */
+  const tabRS = panel.querySelector('#tab_runtime');
+  tabRS.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">Runtime Secrets</div>
+        <div class="ptk-grid">
+          <button id="rs_clear" class="ptk-btn">Clear</button>
+          <button id="rs_copy" class="ptk-btn">Copiar JSON</button>
+        </div>
+      </div>
+      <div id="rs_results"></div>
+    </div>
+  `;
+  const rsRefs = {
+    clear: tabRS.querySelector('#rs_clear'),
+    copy:  tabRS.querySelector('#rs_copy'),
+    results: tabRS.querySelector('#rs_results')
+  };
+  const rs = { findings: [] };
+  function rsAdd(op, key, iv, data){
+    const rec = { op, key, iv, data };
+    rs.findings.push(rec);
+    const div = document.createElement('div');
+    div.className = 'ptk-row';
+    const head = document.createElement('div'); head.innerHTML = `<b>${op}</b>`;
+    const body = document.createElement('div'); body.className='ptk-code';
+    body.innerHTML = `key: ${esc(key)}<br>iv: ${esc(iv)}<br>data: ${esc(data)}`;
+    div.appendChild(head); div.appendChild(body);
+    rsRefs.results.appendChild(div);
+  }
+  function esc(s){
+    return String(s||'').replace(/[&<>'"]/g, c => {
+      if (c === '&') return '&amp;';
+      if (c === '<') return '&lt;';
+      if (c === '>') return '&gt;';
+      if (c === '"') return '&quot;';
+      if (c === "'") return '&#39;';
+      return c;
+    });
+  }
+  rsRefs.clear.onclick = ()=>{ rs.findings.length=0; rsRefs.results.innerHTML=''; };
+  rsRefs.copy.onclick = ()=>{ const out=JSON.stringify(rs.findings,null,2); clip(out); rsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>rsRefs.copy.textContent='Copiar JSON',1200); };
+
+  // Hook CryptoJS AES encrypt/decrypt
+  (function(){
+    try{
+      const aes = window.CryptoJS && window.CryptoJS.AES;
+      if(!aes) return;
+      const wrap = fnName=>{
+        if(typeof aes[fnName] !== 'function') return;
+        const orig = aes[fnName];
+        aes[fnName] = function(data, key, cfg){
+          try{
+            const keyStr = key && key.toString ? key.toString() : String(key);
+            const ivStr = cfg && cfg.iv && cfg.iv.toString ? cfg.iv.toString() : (cfg && cfg.iv ? String(cfg.iv) : '');
+            const dataStr = data && data.toString ? data.toString() : String(data);
+            rsAdd('AES.'+fnName, keyStr, ivStr, dataStr);
+          }catch(e){}
+          return orig.apply(this, arguments);
+        };
+      };
+      wrap('encrypt');
+      wrap('decrypt');
+    }catch(e){}
+  })();
 
   /* ============================
      CRAWLER

@@ -260,9 +260,9 @@
   runtimeNotify = function(){
     panel.style.display = '';
     showTab('runtime');
-    if (!runtimeAlerted && typeof alert === 'function'){
+    if (!runtimeAlerted){
       runtimeAlerted = true;
-      alert('Runtime secret found');
+      try{ console.log('Runtime secret found'); }catch(e){}
     }
   };
   tabsEl.addEventListener('click', (e)=>{
@@ -1009,12 +1009,13 @@ rsRefs.pmToggle.onclick=()=>{
   (function(){
     const origPM = window.postMessage;
     if (typeof origPM === 'function'){
+      const serialize = msg => { try{ return typeof msg === 'string' ? msg : JSON.stringify(msg); }catch(e){ return String(msg); } };
       window.postMessage = function(message, targetOrigin, transfer){
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:String(message) }); }catch(e){}
+        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:serialize(message) }); }catch(e){}
         return origPM.apply(this, arguments);
       };
       window.addEventListener && window.addEventListener('message', ev=>{
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:String(ev.data), origin: ev.origin }); }catch(e){}
+        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin }); }catch(e){}
       });
     }
   })();

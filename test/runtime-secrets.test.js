@@ -166,17 +166,18 @@ global.postMessage = function(msg, origin){ if (msgHandler) msgHandler({ data: m
 
 // Hooks
 (function(){
+  const serialize = msg => { try{ return typeof msg === 'string' ? msg : JSON.stringify(msg); }catch(e){ return String(msg); } };
   const OrigWS = global.WebSocket;
   global.WebSocket = function(...args){
     const ws = OrigWS(...args);
-    addRuntimeLog3({ type:'WS.connect', data:String(args[0]) });
+    addRuntimeLog3({ type:'WS.connect', data:serialize(args[0]) });
     const origSend = ws.send;
     ws.send = function(data){
-      addRuntimeLog3({ type:'WS.send', data:String(data) });
+      addRuntimeLog3({ type:'WS.send', data:serialize(data) });
       return origSend.apply(this, arguments);
     };
     ws.addEventListener('message', ev=>{
-      addRuntimeLog3({ type:'WS.recv', data:String(ev.data) });
+      addRuntimeLog3({ type:'WS.recv', data:serialize(ev.data) });
     });
     return ws;
   };
@@ -184,20 +185,20 @@ global.postMessage = function(msg, origin){ if (msgHandler) msgHandler({ data: m
   const OrigES = global.EventSource;
   global.EventSource = function(...args){
     const es = OrigES(...args);
-    addRuntimeLog3({ type:'SSE.connect', data:String(args[0]) });
+    addRuntimeLog3({ type:'SSE.connect', data:serialize(args[0]) });
     es.addEventListener('message', ev=>{
-      addRuntimeLog3({ type:'SSE.message', data:String(ev.data) });
+      addRuntimeLog3({ type:'SSE.message', data:serialize(ev.data) });
     });
     return es;
   };
 
   const origPM = global.postMessage;
   global.postMessage = function(message, targetOrigin, transfer){
-    addRuntimeLog3({ type:'postMessage.send', data:String(message) });
+    addRuntimeLog3({ type:'postMessage.send', data:serialize(message) });
     return origPM.call(this, message, targetOrigin, transfer);
   };
   global.addEventListener('message', ev=>{
-    addRuntimeLog3({ type:'postMessage.receive', data:String(ev.data), origin: ev.origin });
+    addRuntimeLog3({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin });
   });
 })();
 
@@ -210,6 +211,7 @@ const es = new EventSource('/sse');
 es.dispatch('message','hello');
 
 postMessage('ping','*');
+postMessage({a:1},'*');
 
 assert.deepStrictEqual(logs3[0], { type:'WS.connect', data:'wss://example' });
 assert.deepStrictEqual(logs3[1], { type:'WS.send', data:'hi' });
@@ -218,6 +220,8 @@ assert.deepStrictEqual(logs3[3], { type:'SSE.connect', data:'/sse' });
 assert.deepStrictEqual(logs3[4], { type:'SSE.message', data:'hello' });
 assert.deepStrictEqual(logs3[5], { type:'postMessage.send', data:'ping' });
 assert.deepStrictEqual(logs3[6], { type:'postMessage.receive', data:'ping', origin: '*' });
-assert.strictEqual(logs3.length,7);
+assert.deepStrictEqual(logs3[7], { type:'postMessage.send', data:'{"a":1}' });
+assert.deepStrictEqual(logs3[8], { type:'postMessage.receive', data:'{"a":1}', origin: '*' });
+assert.strictEqual(logs3.length,9);
 
 console.log('WebSocket/EventSource/postMessage tests passed');

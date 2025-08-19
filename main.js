@@ -1298,6 +1298,9 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   const RX_DO_SPACE = /https?:\/\/([a-z0-9.\-]+)\.([a-z0-9-]+)\.digitaloceanspaces\.com\/[^\s"'<>]*/gi;
   const RX_AZURE_BL = /https?:\/\/([a-z0-9-]+)\.blob\.core\.windows\.net\/([a-z0-9\-]+)\/[^\s"'<>]*/gi;
   const RX_AZURE_DFS= /https?:\/\/([a-z0-9-]+)\.dfs\.core\.windows\.net\/([a-z0-9\-]+)\/[^\s"'<>]*/gi;
+  const RX_CF_R2   = /https?:\/\/([a-z0-9-]+)\.r2\.cloudflarestorage\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
+  const RX_OSS_VHOST = /https?:\/\/([a-z0-9.\-]+)\.oss-([a-z0-9-]+)\.aliyuncs\.com\/[^\s"'<>]*/gi;
+  const RX_OSS_PATH  = /https?:\/\/oss-([a-z0-9-]+)\.aliyuncs\.com\/([a-z0-9.\-]+)\/[^\s"'<>]*/gi;
 
   function scanTextForBuckets(text, source, srcUrl){
     const out = [];
@@ -1313,6 +1316,9 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
     while ((m = RX_GCS_HOST.exec(text))) push(m,'GCS','vhost',{bucket:m[1]});
     while ((m = RX_GCS_PATH.exec(text))) push(m,'GCS','path',{bucket:m[1]});
     while ((m = RX_DO_SPACE.exec(text))) push(m,'DO','vhost',{bucket:m[1],region:m[2]});
+    while ((m = RX_CF_R2.exec(text))) push(m,'R2','path',{account:m[1],bucket:m[2]});
+    while ((m = RX_OSS_VHOST.exec(text))) push(m,'OSS','vhost',{bucket:m[1],region:m[2]});
+    while ((m = RX_OSS_PATH.exec(text)))  push(m,'OSS','path',{bucket:m[2],region:m[1]});
     while ((m = RX_AZURE_BL.exec(text))) push(m,'AZURE','blob',{account:m[1],container:m[2]});
     while ((m = RX_AZURE_DFS.exec(text))) push(m,'AZURE','dfs',{account:m[1],container:m[2]});
     return out;
@@ -1373,6 +1379,14 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
       return `https://storage.googleapis.com/storage/v1/b/${c.bucket}/o?maxResults=10`;
     } else if (c.provider==='DO'){
       if (c.region) return `https://${c.bucket}.${c.region}.digitaloceanspaces.com/?list-type=2`;
+      return null;
+    } else if (c.provider==='R2'){
+      if (c.account && c.bucket) return `https://${c.account}.r2.cloudflarestorage.com/${c.bucket}?list-type=2`;
+      return null;
+    } else if (c.provider==='OSS'){
+      if (!c.region || !c.bucket) return null;
+      if (c.style==='vhost') return `https://${c.bucket}.oss-${c.region}.aliyuncs.com/?list-type=2`;
+      if (c.style==='path')  return `https://oss-${c.region}.aliyuncs.com/${c.bucket}?list-type=2`;
       return null;
     } else if (c.provider==='AZURE'){
       if (c.style==='blob' || c.style==='dfs'){

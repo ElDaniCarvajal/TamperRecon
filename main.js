@@ -912,7 +912,7 @@ rsRefs.dl.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); textDownlo
     }catch(e){}
   })();
 
-  // Scan window.AC_DATA and localStorage for secrets
+  // Scan window.AC_DATA, Web Storage and cookies for secrets
   (function(){
     const SECRET_PATTERNS = PATTERNS.filter(p=>p.key!=='URL' && p.key!=='Route');
     function matchesSecret(str){
@@ -952,7 +952,28 @@ rsRefs.dl.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); textDownlo
         }
       }catch(_e){}
     }
-    const run = ()=>{ scanACData(); scanLocalStorage(); };
+    function scanSessionStorage(){
+      try{
+        for (let i=0; i<sessionStorage.length; i++){
+          const k = sessionStorage.key(i);
+          const v = sessionStorage.getItem(k);
+          if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog({ type:'sessionStorage', key:k, data:v });
+        }
+      }catch(_e){}
+    }
+    function scanCookies(){
+      try{
+        const all = (document.cookie || '').split(';');
+        all.forEach(c=>{
+          if (!c) return;
+          const idx = c.indexOf('=');
+          const k = idx>=0 ? c.slice(0,idx).trim() : c.trim();
+          const v = idx>=0 ? decodeURIComponent(c.slice(idx+1)) : '';
+          if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog({ type:'cookie', key:k, data:v });
+        });
+      }catch(_e){}
+    }
+    const run = ()=>{ scanACData(); scanLocalStorage(); scanSessionStorage(); scanCookies(); };
     run();
     setTimeout(run, 1000);
   })();

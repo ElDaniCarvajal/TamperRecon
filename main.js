@@ -18,7 +18,7 @@
   const UI = { Z: 2147483647 };
   const FILES = { AUTO_START: false, MAX_CONCURRENCY: 4, REQ_DELAY_MS: 200, TIMEOUT_MS: 8000, MAX_GEN: 200 };
   const JS    = { AUTO_START: false, MAX_CONCURRENCY: 3, TIMEOUT_MS: 12000, FETCH_DELAY_MS: 120 };
-  const CRAWL = { MAX_PAGES: 180, MAX_CONCURRENCY: 3, DELAY_MS: 150, TIMEOUT_MS: 10000 };
+  const CRAWL = { MAX_PAGES: 180, MAX_CONCURRENCY: 3, DELAY_MS: 150, TIMEOUT_MS: 10000, MAX_QUERY_LEN: 2000 };
   const VERS  = { TIMEOUT_MS: 9000, BYTES_HEAD: 3500, MAX_CONCURRENCY: 5 };
   const FUZZ  = { MAX_CONCURRENCY: 4, TIMEOUT_MS: 9000, SAFE_MODE: true, DELAY_MS: 120 };
   const BUCKS = { TIMEOUT_MS: 9000, JS_DETECT_MAX_CONC: 6 };
@@ -797,9 +797,12 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   }
   function crawlEnqueue(url){
     const u = mkAbs(url); if (!u) return;
+    let p; try{ p = new URL(u); }catch(_e){ return; }
+    if (p.search.slice(1).length > CRAWL.MAX_QUERY_LEN) return;
     if (!crawlAllowed(u)) return;
-    if (cr.seen.has(u)) return;
-    cr.seen.add(u); cr.q.push(u);
+    const norm = p.origin + p.pathname;
+    if (cr.seen.has(norm)) return;
+    cr.seen.add(norm); cr.q.push(u);
   }
   function crawlExtract(docText, baseUrl, ctype){
     try{

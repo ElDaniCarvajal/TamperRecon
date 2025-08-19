@@ -581,6 +581,8 @@ const PATTERNS = [
   { key:'AWSKey',        label:'AWS Access Key ID',           rx:/\b(AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}\b/g },
   { key:'AuthHeader',    label:'Authorization header',        rx:/['"]Authorization['"]\s*:\s*['"]([^'"]+)['"]/gi },
   { key:'GenericSecret', label:'apiKey/token/secret var',     rx:/\b(api[_-]?key|token|secret|access[_-]?token)\b\s*[:=]\s*['"]([^'"]{8,})['"]/gi },
+  { key:'Password',     label:'Password',                     rx:/password/i },
+  { key:'HexKey',       label:'Hex key (32/64 hex)',          rx:/\b[0-9a-f]{32}(?:[0-9a-f]{32})?\b/gi },
   { key:'URL',           label:'Endpoint http(s)://',         rx:/https?:\/\/[a-z0-9.\-]+(?::\d+)?(?:\/[^\s'"<>()\]]*)?/gi },
   { key:'Route',         label:'Ruta /api|/v1|/auth|/graphql',rx:/(?:['"`])((?:\/|\.)?(?:api|v\d+|auth|graphql)[^'"`<>\s)]{0,160})(?:['"`])/gi }
 ];
@@ -1020,7 +1022,7 @@ rsRefs.pmToggle.onclick=()=>{
     }
   })();
 
-  // Scan window.AC_DATA, Web Storage and cookies for secrets
+  // Scan globals, Web Storage and cookies for secrets
   (function(){
     const SECRET_PATTERNS = PATTERNS.filter(p=>p.key!=='URL' && p.key!=='Route');
     function matchesSecret(str){
@@ -1031,13 +1033,31 @@ rsRefs.pmToggle.onclick=()=>{
       }
       return false;
     }
-    function scanACData(){
+    function scanGlobals(){
       try{
-        if (!window.AC_DATA) return;
         const seen = new WeakSet();
+        const nameRx = /(data|token|secret|pass|key|cfg|config)/i;
+        const hexToStr = h => {
+          try{
+            if (h.length % 2 || /[^0-9a-f]/i.test(h)) return null;
+            let out='';
+            for(let i=0;i<h.length;i+=2){
+              const code=parseInt(h.slice(i,i+2),16);
+              if (isNaN(code)) return null;
+              out+=String.fromCharCode(code);
+            }
+            return out;
+          }catch(_e){ return null; }
+        };
         const walk = (obj, path)=>{
           if (typeof obj === 'string'){
-            if (matchesSecret(obj) || matchesSecret(path)) addRuntimeLog({ type:'AC_DATA', key:path, data:obj });
+            if (matchesSecret(obj) || matchesSecret(path)) addRuntimeLog({ type:'global', key:path, data:obj });
+            const decoded = hexToStr(obj);
+            if (decoded){
+              let parsed=false;
+              try{ const js=JSON.parse(decoded); parsed=true; walk(js, path); }catch(_e){}
+              if (!parsed && matchesSecret(decoded)) addRuntimeLog({ type:'global', key:path, data:decoded });
+            }
             return;
           }
           if (obj && typeof obj === 'object'){
@@ -1048,7 +1068,11 @@ rsRefs.pmToggle.onclick=()=>{
             });
           }
         };
-        walk(window.AC_DATA, 'AC_DATA');
+        Object.getOwnPropertyNames(window).forEach(name=>{
+          if (!nameRx.test(name)) return;
+          let val; try{ val = window[name]; }catch(_e){ return; }
+          walk(val, name);
+        });
       }catch(_e){}
     }
     function scanLocalStorage(){
@@ -1081,7 +1105,7 @@ rsRefs.pmToggle.onclick=()=>{
         });
       }catch(_e){}
     }
-    const run = ()=>{ scanACData(); scanLocalStorage(); scanSessionStorage(); scanCookies(); };
+    const run = ()=>{ scanGlobals(); scanLocalStorage(); scanSessionStorage(); scanCookies(); };
     run();
     setTimeout(run, 1000);
   })();

@@ -46,14 +46,17 @@ assert.strictEqual(logs.length,3);
 
 console.log('Runtime proxy tests passed');
 
-// === Scan AC_DATA and localStorage ===
+// === Scan globals and localStorage ===
 
 const logs2 = [];
 function addRuntimeLog2(rec){
   logs2.push(rec);
 }
 
-const PATTERNS = [{ rx:/(api[_-]?key|token|secret)/i }];
+const PATTERNS = [
+  { rx:/(api[_-]?key|token|secret|password)/i },
+  { rx:/^[0-9a-f]{32}(?:[0-9a-f]{32})?$/i }
+];
 
 function matchesSecret(str){
   if (typeof str !== 'string') return false;
@@ -64,11 +67,30 @@ function matchesSecret(str){
   return false;
 }
 
-function scanACData(){
+function scanGlobals(){
   const seen = new WeakSet();
+  const nameRx = /(data|token|secret|pass|key|cfg|config)/i;
+  const hexToStr = h=>{
+    try{
+      if (h.length%2 || /[^0-9a-f]/i.test(h)) return null;
+      let out='';
+      for(let i=0;i<h.length;i+=2){
+        const code=parseInt(h.slice(i,i+2),16);
+        if (isNaN(code)) return null;
+        out += String.fromCharCode(code);
+      }
+      return out;
+    }catch(_e){ return null; }
+  };
   function walk(obj, path){
     if (typeof obj === 'string'){
-      if (matchesSecret(obj) || matchesSecret(path)) addRuntimeLog2({ type:'AC_DATA', key:path, data:obj });
+      if (matchesSecret(obj) || matchesSecret(path)) addRuntimeLog2({ type:'global', key:path, data:obj });
+      const decoded = hexToStr(obj);
+      if (decoded){
+        let parsed=false;
+        try{ const js=JSON.parse(decoded); parsed=true; walk(js, path); }catch(_e){}
+        if (!parsed && matchesSecret(decoded)) addRuntimeLog2({ type:'global', key:path, data:decoded });
+      }
       return;
     }
     if (obj && typeof obj === 'object'){
@@ -76,7 +98,10 @@ function scanACData(){
       Object.entries(obj).forEach(([k,v])=>walk(v, path?path+'.'+k:k));
     }
   }
-  if (global.AC_DATA) walk(global.AC_DATA, 'AC_DATA');
+  Object.getOwnPropertyNames(global).forEach(name=>{
+    if (!nameRx.test(name)) return;
+    walk(global[name], name);
+  });
 }
 
 function scanLocalStorage(){
@@ -109,7 +134,14 @@ function scanCookies(){
   });
 }
 
-global.AC_DATA = { foo:{ token:'abc123' }, other:'none' };
+const AC_DATA_ARR = [
+  "315949337a426b6338234924417661614d24356c5737576a24362121232a4d65",
+  "52443840443623644152623437716c33",
+  "7b22757365726e616d65223a2022736572766963696f732e6d6f76696c40696e742e636f7070656c2e636f6d222c227573657270617373776f7264223a202261637475616c697a6163696f6e222c227573657274797065223a20317d",
+  "c1ef74068b0653252b981e6c0cd35e49fbc2df55b765900e5e85c4e8571f528b",
+  "96e5fbd355ed852a5834e8"
+];
+global.AC_DATA = { foo:{ token:'abc123' }, other:'none', arr: AC_DATA_ARR };
 global.localStorage = {
   _data:{ apiKey:'token-XYZ', other:'value' },
   length: 2,
@@ -124,16 +156,20 @@ global.sessionStorage = {
 };
 global.document = { cookie:'apiKey=secret123; other=val' };
 
-scanACData();
+scanGlobals();
 scanLocalStorage();
 scanSessionStorage();
 scanCookies();
 
-assert.deepStrictEqual(logs2[0], { type:'AC_DATA', key:'AC_DATA.foo.token', data:'abc123' });
-assert.deepStrictEqual(logs2[1], { type:'localStorage', key:'apiKey', data:'token-XYZ' });
-assert.deepStrictEqual(logs2[2], { type:'sessionStorage', key:'sessionToken', data:'abc-session' });
-assert.deepStrictEqual(logs2[3], { type:'cookie', key:'apiKey', data:'secret123' });
-assert.strictEqual(logs2.length,4);
+assert.deepStrictEqual(logs2[0], { type:'global', key:'AC_DATA.foo.token', data:'abc123' });
+assert.deepStrictEqual(logs2[1], { type:'global', key:'AC_DATA.arr.0', data:AC_DATA_ARR[0] });
+assert.deepStrictEqual(logs2[2], { type:'global', key:'AC_DATA.arr.1', data:AC_DATA_ARR[1] });
+assert.deepStrictEqual(logs2[3], { type:'global', key:'AC_DATA.arr.2.userpassword', data:'actualizacion' });
+assert.deepStrictEqual(logs2[4], { type:'global', key:'AC_DATA.arr.3', data:AC_DATA_ARR[3] });
+assert.deepStrictEqual(logs2[5], { type:'localStorage', key:'apiKey', data:'token-XYZ' });
+assert.deepStrictEqual(logs2[6], { type:'sessionStorage', key:'sessionToken', data:'abc-session' });
+assert.deepStrictEqual(logs2[7], { type:'cookie', key:'apiKey', data:'secret123' });
+assert.strictEqual(logs2.length,8);
 
 console.log('Runtime scan tests passed');
 

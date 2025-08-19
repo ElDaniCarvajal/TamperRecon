@@ -912,6 +912,51 @@ rsRefs.dl.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); textDownlo
     }catch(e){}
   })();
 
+  // Scan window.AC_DATA and localStorage for secrets
+  (function(){
+    const SECRET_PATTERNS = PATTERNS.filter(p=>p.key!=='URL' && p.key!=='Route');
+    function matchesSecret(str){
+      if (typeof str !== 'string') return false;
+      for (const p of SECRET_PATTERNS){
+        p.rx.lastIndex = 0;
+        if (p.rx.test(str)) return true;
+      }
+      return false;
+    }
+    function scanACData(){
+      try{
+        if (!window.AC_DATA) return;
+        const seen = new WeakSet();
+        const walk = (obj, path)=>{
+          if (typeof obj === 'string'){
+            if (matchesSecret(obj) || matchesSecret(path)) addRuntimeLog({ type:'AC_DATA', key:path, data:obj });
+            return;
+          }
+          if (obj && typeof obj === 'object'){
+            if (seen.has(obj)) return; seen.add(obj);
+            Object.entries(obj).forEach(([k,v])=>{
+              const p = path? path + '.' + k : k;
+              walk(v, p);
+            });
+          }
+        };
+        walk(window.AC_DATA, 'AC_DATA');
+      }catch(_e){}
+    }
+    function scanLocalStorage(){
+      try{
+        for (let i=0; i<localStorage.length; i++){
+          const k = localStorage.key(i);
+          const v = localStorage.getItem(k);
+          if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog({ type:'localStorage', key:k, data:v });
+        }
+      }catch(_e){}
+    }
+    const run = ()=>{ scanACData(); scanLocalStorage(); };
+    run();
+    setTimeout(run, 1000);
+  })();
+
   /* ============================
      CRAWLER
   ============================ */

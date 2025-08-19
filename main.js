@@ -125,6 +125,7 @@
     <div class="ptk-tabs" id="tabs">
       <div class="ptk-tab active" data-tab="files">Files</div>
       <div class="ptk-tab" data-tab="js">JS Hunter</div>
+      <div class="ptk-tab" data-tab="runtime">Runtime Secrets</div>
       <div class="ptk-tab" data-tab="crawler">Crawler</div>
       <div class="ptk-tab" data-tab="versions">Versions</div>
       <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
@@ -132,6 +133,7 @@
     </div>
     <section id="tab_files"></section>
     <section id="tab_js" style="display:none"></section>
+    <section id="tab_runtime" style="display:none"></section>
     <section id="tab_crawler" style="display:none"></section>
     <section id="tab_versions" style="display:none"></section>
     <section id="tab_fuzzer" style="display:none"></section>
@@ -175,7 +177,7 @@
   };
   const tabsEl = panel.querySelector('#tabs');
   function showTab(name){
-    ['files','js','crawler','versions','fuzzer','buckets'].forEach(t=>{
+    ['files','js','runtime','crawler','versions','fuzzer','buckets'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
       const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
@@ -749,6 +751,93 @@ function jsClear(){ jh.paused=true; jh.started=false; jh.session++; jh.targets=[
 jsRefs.start.onclick=jsStart; jsRefs.pause.onclick=jsPauseResume; jsRefs.clear.onclick=jsClear;
 jsRefs.copy.onclick=()=>{ const current=jh.findings.filter(f=>f.session===jh.session); const out=JSON.stringify(current,null,2); clip(out); jsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>jsRefs.copy.textContent='Copiar JSON',1200); };
 jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session).map(r=>({file:r.file,line: (typeof r.line==='number'?(r.line+1):''),type:r.type,value:r.value,host:r.host||''})); const head=['file','line','type','value','host']; csvDownload(`js_hunter_${nowStr()}.csv`, head, rows); };
+
+/* ============================
+   Runtime Secrets (SubtleCrypto Hooks)
+============================ */
+const tabRuntime = panel.querySelector('#tab_runtime');
+tabRuntime.innerHTML = `
+  <div class="ptk-box">
+    <div class="ptk-flex">
+      <div class="ptk-hdr">Runtime Secrets</div>
+      <div class="ptk-grid">
+        <button id="rs_start" class="ptk-btn">Hook</button>
+        <button id="rs_stop" class="ptk-btn">Unhook</button>
+        <button id="rs_clear" class="ptk-btn">Clear</button>
+        <button id="rs_copy" class="ptk-btn">Copiar JSON</button>
+        <button id="rs_csv" class="ptk-btn">CSV</button>
+      </div>
+    </div>
+    <div id="rs_status" style="margin:6px 0">Hook desactivado</div>
+    <div id="rs_results"></div>
+  </div>
+`;
+
+const rsRefs = {
+  start:  tabRuntime.querySelector('#rs_start'),
+  stop:   tabRuntime.querySelector('#rs_stop'),
+  clear:  tabRuntime.querySelector('#rs_clear'),
+  copy:   tabRuntime.querySelector('#rs_copy'),
+  csv:    tabRuntime.querySelector('#rs_csv'),
+  status: tabRuntime.querySelector('#rs_status'),
+  results:tabRuntime.querySelector('#rs_results')
+};
+
+const rs = { active:false, findings:[], originals:{} };
+
+function rsRender(){
+  rsRefs.results.innerHTML='';
+  rs.findings.forEach(f=>{
+    const div=document.createElement('div'); div.className='ptk-row';
+    div.innerHTML = `<div style="opacity:.8">${f.time}</div>`+
+                    `<div><b>${f.method}</b>: <code class="ptk-code">${JSON.stringify(f.args)}</code></div>`;
+    rsRefs.results.appendChild(div);
+  });
+}
+
+function rsSerializeArgs(args){
+  return Array.from(args).map(a=>{
+    if (a instanceof ArrayBuffer) return `ArrayBuffer(${a.byteLength})`;
+    if (ArrayBuffer.isView(a)) return `${a.constructor.name}(${a.byteLength})`;
+    if (typeof CryptoKey!=='undefined' && a instanceof CryptoKey) return `CryptoKey(${a.type||''})`;
+    if (typeof a==='object') { try { return JSON.stringify(a); } catch { return String(a); } }
+    return String(a);
+  });
+}
+
+function rsHook(){
+  if (rs.active) return;
+  const subtle = window.crypto && window.crypto.subtle;
+  if (!subtle){ rsRefs.status.textContent='SubtleCrypto no disponible'; return; }
+  ['importKey','generateKey','encrypt','decrypt'].forEach(name=>{
+    const orig = subtle[name];
+    if (typeof orig!=='function') return;
+    rs.originals[name]=orig;
+    subtle[name]=new Proxy(orig, {
+      apply(target,thisArg,argArray){
+        rs.findings.push({method:name,args:rsSerializeArgs(argArray),time:new Date().toISOString()});
+        rsRender();
+        return target.apply(thisArg,argArray);
+      }
+    });
+  });
+  rs.active=true;
+  rsRefs.status.textContent='Hook activo';
+}
+
+function rsUnhook(){
+  if (!rs.active) return;
+  const subtle = window.crypto && window.crypto.subtle;
+  Object.entries(rs.originals).forEach(([n,f])=>{ if(subtle) subtle[n]=f; });
+  rs.active=false;
+  rsRefs.status.textContent='Hook desactivado';
+}
+
+rsRefs.start.onclick=rsHook;
+rsRefs.stop.onclick=rsUnhook;
+rsRefs.clear.onclick=()=>{ rs.findings.length=0; rsRender(); };
+rsRefs.copy.onclick=()=>{ clip(JSON.stringify(rs.findings,null,2)); rsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>rsRefs.copy.textContent='Copiar JSON',1200); };
+rsRefs.csv.onclick=()=>{ const rows=rs.findings.map(f=>({method:f.method,args:JSON.stringify(f.args),time:f.time})); const head=['method','args','time']; csvDownload(`runtime_secrets_${nowStr()}.csv`, head, rows); };
 
   /* ============================
      CRAWLER

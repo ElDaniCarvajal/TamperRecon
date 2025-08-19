@@ -1,3 +1,40 @@
+function scanChunksAndTs(files){
+  const findings = [];
+  const secretPatterns = [
+    /api[_-]?key/ig,
+    /token/ig,
+    /secret/ig,
+    /password/ig
+  ];
+  const endpointRx = /\bhttps?:\/\/[^\s'"<>]+/ig;
+  const ipRx = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+  const domainRx = /\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/ig;
+  for (const [name, content] of Object.entries(files || {})){
+    if (!/\.ts$|chunk/i.test(name)) continue;
+    for (const rx of secretPatterns){
+      let m; while ((m = rx.exec(content))){ findings.push({ file:name, type:'secret', match:m[0] }); }
+      rx.lastIndex = 0;
+    }
+    let m;
+    while ((m = endpointRx.exec(content))){ findings.push({ file:name, type:'endpoint', match:m[0] }); }
+    endpointRx.lastIndex = 0;
+    while ((m = ipRx.exec(content))){ findings.push({ file:name, type:'ip', match:m[0] }); }
+    ipRx.lastIndex = 0;
+    while ((m = domainRx.exec(content))){
+      const start = m.index;
+      const prev = content.slice(Math.max(0, start - 8), start);
+      if (/https?:\/\//i.test(prev)) continue;
+      findings.push({ file:name, type:'domain', match:m[0] });
+    }
+    domainRx.lastIndex = 0;
+  }
+  return findings;
+}
+
+if (typeof module !== 'undefined' && module.exports){
+  module.exports.scanChunksAndTs = scanChunksAndTs;
+}
+
 // ==UserScript==
 // @name         Pentest Toolkit++ (Files/JS/Crawler/Versions/API Fuzzer/Buckets, Shadow DOM, Progress+Lines)
 // @namespace    https://tu-namespace
@@ -9,7 +46,7 @@
 // @connect      *
 // @run-at       document-idle
 // ==/UserScript==
-(function () {
+if (typeof window !== 'undefined') (function () {
   'use strict';
 
   /* ============================

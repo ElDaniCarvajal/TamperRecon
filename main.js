@@ -88,33 +88,38 @@
     return n;
   }
 
+  const eventLogs = [];
   const runtimeLogs = [];
   let rsRender;
-  function addRuntimeLog(type, code){
-    runtimeLogs.push({ type, code });
+  function logEvent(type, details){
+    eventLogs.push(Object.assign({ time: new Date().toISOString(), type }, details));
+  }
+  function addRuntimeLog(rec){
+    runtimeLogs.push(rec);
+    logEvent('runtime', rec);
     if (typeof rsRender === 'function') rsRender();
   }
   const origEval = window.eval;
   window.eval = function(str){
-    if (typeof str === 'string') addRuntimeLog('eval', str);
+    if (typeof str === 'string') addRuntimeLog({ type:'eval', code:str });
     return origEval.call(this, str);
   };
   const origFunction = window.Function;
   window.Function = new Proxy(origFunction, {
     apply(target, thisArg, args){
       const body = args.length && typeof args[args.length-1]==='string' ? args.join(',') : '';
-      if (body) addRuntimeLog('Function', body);
+      if (body) addRuntimeLog({ type:'Function', code:body });
       return Reflect.apply(target, thisArg, args);
     },
     construct(target, args){
       const body = args.length && typeof args[args.length-1]==='string' ? args.join(',') : '';
-      if (body) addRuntimeLog('Function', body);
+      if (body) addRuntimeLog({ type:'Function', code:body });
       return Reflect.construct(target, args);
     }
   });
   const origSetTimeout = window.setTimeout;
   window.setTimeout = function(handler, timeout, ...args){
-    if (typeof handler === 'string') addRuntimeLog('setTimeout', handler);
+    if (typeof handler === 'string') addRuntimeLog({ type:'setTimeout', code:handler });
     return origSetTimeout.call(this, handler, timeout, ...args);
   };
 
@@ -729,6 +734,7 @@ window.fetch = async function(...args){
   if (jsRefs.captureNet && jsRefs.captureNet.checked){
     try {
       const url = typeof args[0]==='string'? args[0] : (args[0] && args[0].url) || '';
+      logEvent('network', { method:'fetch', url });
       const clone = res.clone();
       const hdrs = Array.from(clone.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n');
       clone.text().then(body=>jsProcessCapture('fetch '+url,hdrs,body)).catch(()=>{});
@@ -744,6 +750,7 @@ XMLHttpRequest.prototype.send = function(...args){
         const hdrs = this.getAllResponseHeaders();
         const body = this.responseText || '';
         const url = this.responseURL || '';
+        logEvent('network', { method:'xhr', url });
         jsProcessCapture('xhr '+url,hdrs,body);
       } catch(e){}
     }
@@ -864,7 +871,16 @@ rsRender = function(){
   runtimeLogs.forEach((r,i)=>{
     const div=document.createElement('div'); div.className='ptk-row';
     const top=document.createElement('div'); top.style.opacity='.8'; top.textContent=`${i+1} • ${r.type}`;
-    const code=document.createElement('code'); code.className='ptk-code'; code.style.whiteSpace='pre-wrap'; code.textContent=r.code;
+    const code=document.createElement('code'); code.className='ptk-code'; code.style.whiteSpace='pre-wrap';
+    if (r.code !== undefined){
+      code.textContent = r.code;
+    } else {
+      const parts = [];
+      if (r.key !== undefined) parts.push(`key: ${r.key}`);
+      if (r.iv !== undefined) parts.push(`iv: ${r.iv}`);
+      if (r.data !== undefined) parts.push(`data: ${r.data}`);
+      code.textContent = parts.join('\n');
+    }
     div.appendChild(top); div.appendChild(code); rsRefs.results.appendChild(div);
   });
 };
@@ -872,52 +888,6 @@ rsRender();
 rsRefs.clear.onclick=()=>{ runtimeLogs.length=0; rsRender(); };
 rsRefs.copy.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); clip(out); rsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>rsRefs.copy.textContent='Copiar JSON',1200); };
 rsRefs.dl.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); textDownload(`runtime_secrets_${nowStr()}.txt`, out); };
-
-  /* ============================
-     RUNTIME SECRETS
-  ============================ */
-  const tabRS = panel.querySelector('#tab_runtime');
-  tabRS.innerHTML = `
-    <div class="ptk-box">
-      <div class="ptk-flex">
-        <div class="ptk-hdr">Runtime Secrets</div>
-        <div class="ptk-grid">
-          <button id="rs_clear" class="ptk-btn">Clear</button>
-          <button id="rs_copy" class="ptk-btn">Copiar JSON</button>
-        </div>
-      </div>
-      <div id="rs_results"></div>
-    </div>
-  `;
-  const rsRefs = {
-    clear: tabRS.querySelector('#rs_clear'),
-    copy:  tabRS.querySelector('#rs_copy'),
-    results: tabRS.querySelector('#rs_results')
-  };
-  const rs = { findings: [] };
-  function rsAdd(op, key, iv, data){
-    const rec = { op, key, iv, data };
-    rs.findings.push(rec);
-    const div = document.createElement('div');
-    div.className = 'ptk-row';
-    const head = document.createElement('div'); head.innerHTML = `<b>${op}</b>`;
-    const body = document.createElement('div'); body.className='ptk-code';
-    body.innerHTML = `key: ${esc(key)}<br>iv: ${esc(iv)}<br>data: ${esc(data)}`;
-    div.appendChild(head); div.appendChild(body);
-    rsRefs.results.appendChild(div);
-  }
-  function esc(s){
-    return String(s||'').replace(/[&<>'"]/g, c => {
-      if (c === '&') return '&amp;';
-      if (c === '<') return '&lt;';
-      if (c === '>') return '&gt;';
-      if (c === '"') return '&quot;';
-      if (c === "'") return '&#39;';
-      return c;
-    });
-  }
-  rsRefs.clear.onclick = ()=>{ rs.findings.length=0; rsRefs.results.innerHTML=''; };
-  rsRefs.copy.onclick = ()=>{ const out=JSON.stringify(rs.findings,null,2); clip(out); rsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>rsRefs.copy.textContent='Copiar JSON',1200); };
 
   // Hook CryptoJS AES encrypt/decrypt
   (function(){
@@ -932,7 +902,7 @@ rsRefs.dl.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); textDownlo
             const keyStr = key && key.toString ? key.toString() : String(key);
             const ivStr = cfg && cfg.iv && cfg.iv.toString ? cfg.iv.toString() : (cfg && cfg.iv ? String(cfg.iv) : '');
             const dataStr = data && data.toString ? data.toString() : String(data);
-            rsAdd('AES.'+fnName, keyStr, ivStr, dataStr);
+            addRuntimeLog({ type:'AES.'+fnName, key:keyStr, iv:ivStr, data:dataStr });
           }catch(e){}
           return orig.apply(this, arguments);
         };

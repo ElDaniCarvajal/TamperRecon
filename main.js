@@ -905,7 +905,7 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
   const vd = { findings: [], seen:new Set(), session:0, total:0, done:0, active:0 };
 
   const RX_VER = /\b(?:v|version[^\w]?|ver[^\w]?|release[^\w]?|build[^\w]?){0,1}\s*([0-9]+\.[0-9]+(?:\.[0-9]+){0,3}(?:[-_a-z0-9.]+)?)\b/gi;
-  const RX_FILE_VER = /(?:jquery|react|vue|angular|bootstrap|moment|lodash|underscore|d3|leaflet|three|ckeditor|tinymce|swiper|alpine|next|nuxt|webpack|tailwind|fontawesome|sentry|amplitude|mixpanel)[^\/]*?([0-9]+(?:\.[0-9]+){1,3})/i;
+  const RX_FILE_VER = /(?:jquery|react|vue|angular|bootstrap|moment|lodash|underscore|d3|leaflet|three|ckeditor|tinymce|swiper|alpine|next|nuxt|webpack|tailwind|fontawesome|sentry|amplitude|mixpanel|express|nestjs|chart|semantic|ember)[^\/]*?([0-9]+(?:\.[0-9]+){1,3})/i;
 
   function vdAdd(kind, tech, version, url, where, evidence, file, line){
     // Para headers dedup por host, no por URL específica

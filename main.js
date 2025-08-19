@@ -38,6 +38,17 @@
   const sameOrigin = url => { try { return new URL(url, location.origin).origin === location.origin; } catch { return false; } };
   const mkAbs = p => { try { return new URL(p, location.href).href; } catch { return null; } };
   const escCSV = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
+  const escHTML = s => String(s ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+  const highlightBase64 = text => {
+    if (typeof atob !== 'function') return text;
+    return text.replace(/\b[A-Za-z0-9+/]{20,}={0,2}\b/g, b64 => {
+      try{
+        const dec = atob(b64);
+        if (/[^\x20-\x7E]/.test(dec)) return b64;
+        return `<span class="ptk-b64" title="${escHTML(dec)}">${b64}</span>`;
+      }catch(_e){ return b64; }
+    });
+  };
   const family = status => (status>=200&&status<300)?'2':(status>=300&&status<400)?'3':(status>=400&&status<500)?'4':(status>=500)?'5':'other';
   const famColor = f => f==='2'? '#22c55e' : f==='3'? '#facc15' : (f==='4'||f==='5')? '#ef4444' : '#cbd5e1';
   const nowStr = () => new Date().toISOString().replace(/[:.]/g,'-');
@@ -117,7 +128,7 @@
   let updateRuntimeBadge = ()=>{};
   let runtimeNotify = ()=>{};
   let runtimeAlerted = false;
-  let capturePostMessage = true;
+  let capturePostMessage = false;
   function logEvent(type, details){
     eventLogs.push(Object.assign({ time: new Date().toISOString(), type }, details));
   }
@@ -175,6 +186,7 @@
     .ptk-pillbar{height:6px;background:#1f2a44;border-radius:8px;overflow:hidden}
     .ptk-bar{height:6px;width:0%}
     .ptk-code{opacity:.95;word-break:break-all}
+    .ptk-b64{background:#1f2937;cursor:help}
     input[type="number"],input[type="text"],select{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:4px 6px}
     label{opacity:.95}
   `;
@@ -912,21 +924,24 @@ const rsRefs = {
   pmToggle: tabRuntime.querySelector('#rs_pm_toggle'),
   results: tabRuntime.querySelector('#rs_results')
 };
+rsRefs.pmToggle.textContent = capturePostMessage ? 'Pausar postMessage' : 'Reanudar postMessage';
 rsRender = function(){
   rsRefs.results.innerHTML='';
   runtimeLogs.forEach((r,i)=>{
     const div=document.createElement('div'); div.className='ptk-row';
     const top=document.createElement('div'); top.style.opacity='.8'; top.textContent=`${i+1} • ${r.type}`;
     const code=document.createElement('code'); code.className='ptk-code'; code.style.whiteSpace='pre-wrap';
+    let txt;
     if (r.code !== undefined){
-      code.textContent = r.code;
+      txt = r.code;
     } else {
       const parts = [];
       if (r.key !== undefined) parts.push(`key: ${r.key}`);
       if (r.iv !== undefined) parts.push(`iv: ${r.iv}`);
       if (r.data !== undefined) parts.push(`data: ${r.data}`);
-      code.textContent = parts.join('\n');
+      txt = parts.join('\n');
     }
+    code.innerHTML = highlightBase64(escHTML(txt));
     div.appendChild(top); div.appendChild(code); rsRefs.results.appendChild(div);
   });
 };

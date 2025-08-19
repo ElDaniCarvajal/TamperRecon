@@ -39,15 +39,26 @@
   const mkAbs = p => { try { return new URL(p, location.href).href; } catch { return null; } };
   const escCSV = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
   const escHTML = s => String(s ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
-  const highlightBase64 = text => {
-    if (typeof atob !== 'function') return text;
-    return text.replace(/\b[A-Za-z0-9+/]{20,}={0,2}\b/g, b64 => {
+  const highlightEnc = text => {
+    let out = text;
+    if (typeof atob === 'function') {
+      out = out.replace(/\b[A-Za-z0-9+/]{20,}={0,2}\b/g, b64 => {
+        try{
+          const dec = atob(b64);
+          if (/[^\x20-\x7E]/.test(dec)) return b64;
+          return `<span class="ptk-b64" title="${escHTML(dec)}">${b64}</span>`;
+        }catch(_e){ return b64; }
+      });
+    }
+    out = out.replace(/\b(?:[0-9a-fA-F]{2}){4,}\b/g, hex => {
       try{
-        const dec = atob(b64);
-        if (/[^\x20-\x7E]/.test(dec)) return b64;
-        return `<span class="ptk-b64" title="${escHTML(dec)}">${b64}</span>`;
-      }catch(_e){ return b64; }
+        const bytes = hex.match(/.{2}/g).map(b=>parseInt(b,16));
+        const dec = String.fromCharCode(...bytes);
+        if (/[^\x20-\x7E]/.test(dec)) return hex;
+        return `<span class="ptk-hex" title="${escHTML(dec)}">${hex}</span>`;
+      }catch(_e){ return hex; }
     });
+    return out;
   };
   const family = status => (status>=200&&status<300)?'2':(status>=300&&status<400)?'3':(status>=400&&status<500)?'4':(status>=500)?'5':'other';
   const famColor = f => f==='2'? '#22c55e' : f==='3'? '#facc15' : (f==='4'||f==='5')? '#ef4444' : '#cbd5e1';
@@ -187,6 +198,7 @@
     .ptk-bar{height:6px;width:0%}
     .ptk-code{opacity:.95;word-break:break-all}
     .ptk-b64{background:#1f2937;cursor:help}
+    .ptk-hex{background:#422006;cursor:help}
     input[type="number"],input[type="text"],select{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:4px 6px}
     label{opacity:.95}
   `;
@@ -594,7 +606,7 @@ const PATTERNS = [
   { key:'AuthHeader',    label:'Authorization header',        rx:/['"]Authorization['"]\s*:\s*['"]([^'"]+)['"]/gi },
   { key:'GenericSecret', label:'apiKey/token/secret var',     rx:/\b(api[_-]?key|token|secret|access[_-]?token)\b\s*[:=]\s*['"]([^'"]{8,})['"]/gi },
   { key:'Password',     label:'Password',                     rx:/password/i },
-  { key:'HexKey',       label:'Hex key (32/64 hex)',          rx:/\b[0-9a-f]{32}(?:[0-9a-f]{32})?\b/gi },
+  { key:'Hex',          label:'Hex string',                   rx:/\b(?:[0-9a-f]{2}){4,}\b/gi },
   { key:'URL',           label:'Endpoint http(s)://',         rx:/https?:\/\/[a-z0-9.\-]+(?::\d+)?(?:\/[^\s'"<>()\]]*)?/gi },
   { key:'Route',         label:'Ruta /api|/v1|/auth|/graphql',rx:/(?:['"`])((?:\/|\.)?(?:api|v\d+|auth|graphql)[^'"`<>\s)]{0,160})(?:['"`])/gi }
 ];
@@ -751,7 +763,7 @@ function jsRender(){
   current.forEach(f=>{
     const div = document.createElement('div'); div.className='ptk-row';
     div.innerHTML = `<div style="opacity:.8">${f.file}${typeof f.line==='number'?` :${f.line+1}`:''}</div>
-                     <div><b>${f.type}</b>: <code class="ptk-code">${f.value}</code>${f.host?` · <span style="opacity:.9">${f.host}</span>`:''}</div>`;
+                     <div><b>${f.type}</b>: <code class="ptk-code">${highlightEnc(escHTML(f.value))}</code>${f.host?` · <span style="opacity:.9">${f.host}</span>`:''}</div>`;
     jsRefs.results.appendChild(div);
   });
 }
@@ -941,7 +953,7 @@ rsRender = function(){
       if (r.data !== undefined) parts.push(`data: ${r.data}`);
       txt = parts.join('\n');
     }
-    code.innerHTML = highlightBase64(escHTML(txt));
+    code.innerHTML = highlightEnc(escHTML(txt));
     div.appendChild(top); div.appendChild(code); rsRefs.results.appendChild(div);
   });
 };
@@ -1308,7 +1320,7 @@ rsRefs.pmToggle.onclick=()=>{
     div.innerHTML = `<div><b>${f.kind}</b> · ${f.tech||'tech?'} · <b>${f.version||'?'}</b></div>
                      <div class="ptk-code">${f.file}${f.line?` :${f.line}`:''}</div>
                      <div class="ptk-code" style="opacity:.9">${f.url}${f.where?` · ${f.where}`:''}</div>
-                     <div class="ptk-code" style="opacity:.8">${f.evidence||''}</div>`;
+                     <div class="ptk-code" style="opacity:.8">${highlightEnc(escHTML(f.evidence||''))}</div>`;
     vdRefs.results.appendChild(div);
   }
   function vdSetProg(){

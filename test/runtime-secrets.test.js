@@ -136,3 +136,88 @@ assert.deepStrictEqual(logs2[3], { type:'cookie', key:'apiKey', data:'secret123'
 assert.strictEqual(logs2.length,4);
 
 console.log('Runtime scan tests passed');
+
+// === WebSocket, EventSource and postMessage hooks ===
+
+const logs3 = [];
+function addRuntimeLog3(rec){
+  logs3.push(rec);
+}
+
+// Stubs
+class FakeWS {
+  constructor(url){ this.url=url; this.listeners={}; }
+  send(data){}
+  addEventListener(ev, cb){ this.listeners[ev]=cb; }
+  dispatch(ev, data){ if (this.listeners[ev]) this.listeners[ev]({ data }); }
+}
+global.WebSocket = function(url){ return new FakeWS(url); };
+
+class FakeES {
+  constructor(url){ this.url=url; this.listeners={}; }
+  addEventListener(ev, cb){ this.listeners[ev]=cb; }
+  dispatch(ev, data){ if (this.listeners[ev]) this.listeners[ev]({ data }); }
+}
+global.EventSource = function(url){ return new FakeES(url); };
+
+let msgHandler;
+global.addEventListener = function(ev, cb){ if (ev==='message') msgHandler = cb; };
+global.postMessage = function(msg, origin){ if (msgHandler) msgHandler({ data: msg, origin }); };
+
+// Hooks
+(function(){
+  const OrigWS = global.WebSocket;
+  global.WebSocket = function(...args){
+    const ws = OrigWS(...args);
+    addRuntimeLog3({ type:'WS.connect', data:String(args[0]) });
+    const origSend = ws.send;
+    ws.send = function(data){
+      addRuntimeLog3({ type:'WS.send', data:String(data) });
+      return origSend.apply(this, arguments);
+    };
+    ws.addEventListener('message', ev=>{
+      addRuntimeLog3({ type:'WS.recv', data:String(ev.data) });
+    });
+    return ws;
+  };
+
+  const OrigES = global.EventSource;
+  global.EventSource = function(...args){
+    const es = OrigES(...args);
+    addRuntimeLog3({ type:'SSE.connect', data:String(args[0]) });
+    es.addEventListener('message', ev=>{
+      addRuntimeLog3({ type:'SSE.message', data:String(ev.data) });
+    });
+    return es;
+  };
+
+  const origPM = global.postMessage;
+  global.postMessage = function(message, targetOrigin, transfer){
+    addRuntimeLog3({ type:'postMessage.send', data:String(message) });
+    return origPM.call(this, message, targetOrigin, transfer);
+  };
+  global.addEventListener('message', ev=>{
+    addRuntimeLog3({ type:'postMessage.receive', data:String(ev.data), origin: ev.origin });
+  });
+})();
+
+// Trigger
+const ws = new WebSocket('wss://example');
+ws.send('hi');
+ws.dispatch('message','reply');
+
+const es = new EventSource('/sse');
+es.dispatch('message','hello');
+
+postMessage('ping','*');
+
+assert.deepStrictEqual(logs3[0], { type:'WS.connect', data:'wss://example' });
+assert.deepStrictEqual(logs3[1], { type:'WS.send', data:'hi' });
+assert.deepStrictEqual(logs3[2], { type:'WS.recv', data:'reply' });
+assert.deepStrictEqual(logs3[3], { type:'SSE.connect', data:'/sse' });
+assert.deepStrictEqual(logs3[4], { type:'SSE.message', data:'hello' });
+assert.deepStrictEqual(logs3[5], { type:'postMessage.send', data:'ping' });
+assert.deepStrictEqual(logs3[6], { type:'postMessage.receive', data:'ping', origin: '*' });
+assert.strictEqual(logs3.length,7);
+
+console.log('WebSocket/EventSource/postMessage tests passed');

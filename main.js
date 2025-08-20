@@ -773,24 +773,6 @@ function isLikelyBareDomain(host){
   return true;
 }
 
-// eTLD+1 heurístico (muy simplificado) para “Dominio base”
-const PSL2 = new Set(['com.mx','org.mx','edu.mx','gob.mx','co.uk','org.uk','ac.uk','com.br','com.ar']);
-function baseDomainOf(h){
-  h = (h||'').toLowerCase();
-  const parts = h.split('.');
-  if (parts.length <= 2) return h;
-  const last2 = parts.slice(-2).join('.');
-  const last3 = parts.slice(-3).join('.');
-  return PSL2.has(last2) ? last3 : last2;
-}
-
-function inScopeDomain(host, mode, override){
-  if (mode==='all') return true;
-  if (mode==='origin') return host === location.hostname;
-  const baseRef = (override && override.trim()) ? override.trim().toLowerCase() : baseDomainOf(location.hostname);
-  return baseDomainOf(host) === baseRef;
-}
-
 // Extraer literales ' " ` (sin ${})
 // (puedes moverla si ya la tienes)
 function extractStringLiterals(line){
@@ -2031,5 +2013,14 @@ rsRefs.pmToggle.onclick=()=>{
   ============================ */
   if (FILES.AUTO_START) setTimeout(()=>tabFiles.querySelector('#sf_start').click(), 700);
   if (JS.AUTO_START) setTimeout(()=>tabJS.querySelector('#js_start').click(), 900);
+
+  if (typeof window !== 'undefined'){
+    window.addEventListener('error', e => {
+      console.error('TamperRecon error:', e.error || e.message);
+    });
+    window.addEventListener('unhandledrejection', e => {
+      console.error('TamperRecon unhandled rejection:', e.reason);
+    });
+  }
 
 })();

@@ -136,8 +136,9 @@ if (typeof window !== 'undefined') (function () {
      Utils
   ============================ */
   const unique = arr => Array.from(new Set(arr));
-  const sameOrigin = url => { try { return new URL(url, location.origin).origin === location.origin; } catch { return false; } };
-  const mkAbs = p => { try { return new URL(p, location.href).href; } catch { return null; } };
+  const logError = e => console.error('TamperRecon error:', e);
+  const sameOrigin = url => { try { return new URL(url, location.origin).origin === location.origin; } catch(e){ logError(e); return false; } };
+  const mkAbs = p => { try { return new URL(p, location.href).href; } catch(e){ logError(e); return null; } };
   const escCSV = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
   const escHTML = s => String(s ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
   const highlightEnc = text => {
@@ -151,6 +152,7 @@ if (typeof window !== 'undefined') (function () {
           if (/[^\x20-\x7E]/.test(dec)) return b64;
           return `<span class="ptk-b64" title="${escHTML(dec)}">${b64}</span>`;
         } catch (_e) {
+          logError(_e);
           return b64;
         }
       });
@@ -163,6 +165,7 @@ if (typeof window !== 'undefined') (function () {
         const title = printable ? ` title="${escHTML(dec)}"` : '';
         return `<span class="ptk-hex"${title}>${hex}</span>`;
       } catch (_e) {
+        logError(_e);
         return hex;
       }
     });
@@ -171,7 +174,7 @@ if (typeof window !== 'undefined') (function () {
   const family = status => (status>=200&&status<300)?'2':(status>=300&&status<400)?'3':(status>=400&&status<500)?'4':(status>=500)?'5':'other';
   const famColor = f => f==='2'? '#22c55e' : f==='3'? '#facc15' : (f==='4'||f==='5')? '#ef4444' : '#cbd5e1';
   const nowStr = () => new Date().toISOString().replace(/[:.]/g,'-');
-  const clip = text => { try { if (typeof GM_setClipboard==='function') GM_setClipboard(text, 'text'); } catch(e){} };
+  const clip = text => { try { if (typeof GM_setClipboard==='function') GM_setClipboard(text, 'text'); } catch(e){ logError(e); } };
   const looksLike404 = txt => {
     const t = String(txt||'').slice(0,400).toLowerCase();
     return /(404|not found|page not found|p[aá]gina no encontrada|no encontrado|does not exist)/.test(t);
@@ -230,13 +233,14 @@ if (typeof window !== 'undefined') (function () {
         } else if (typeof v === 'object'){
           try {
             out[k] = JSON.stringify(v);
-          } catch {
+          } catch (e){
+            logError(e);
             out[k] = String(v);
           }
         } else {
           out[k] = String(v);
         }
-      }catch(e){}
+      }catch(e){ logError(e); }
     });
     return out;
   }
@@ -390,11 +394,10 @@ if (typeof window !== 'undefined') (function () {
     });
   }
   runtimeNotify = function(){
-    panel.style.display = '';
     showTab('runtime');
     if (!runtimeAlerted){
       runtimeAlerted = true;
-      try{ console.log('Runtime secret found'); }catch(e){}
+      try{ console.log('Runtime secret found'); }catch(e){ logError(e); }
     }
   };
   tabsEl.addEventListener('click', (e)=>{
@@ -523,7 +526,7 @@ if (typeof window !== 'undefined') (function () {
     document.querySelectorAll('[href],[src],[data]').forEach(n=>{
       ['href','src','data'].forEach(a=>{
         const v = n.getAttribute && n.getAttribute(a); if (!v) return;
-        let abs; try { abs = new URL(v, location.origin).href; } catch { return; }
+        let abs; try { abs = new URL(v, location.origin).href; } catch(e){ logError(e); return; }
         if (!sameOrigin(abs)) return; if (extRx.test(abs) || nameRx.test(abs)) urls.add(abs);
       });
     });
@@ -786,7 +789,7 @@ function findDomainsInString(str, pushHost){
   // 1) URLs con esquema: aceptar
   const urlRx = /https?:\/\/[^\s"'`<>()]+/gi;
   const urls = str.match(urlRx) || [];
-  urls.forEach(u => { try { const h = new URL(u).hostname.toLowerCase(); if (isValidHostnameSyntax(h)) pushHost(h, u); } catch{} });
+  urls.forEach(u => { try { const h = new URL(u).hostname.toLowerCase(); if (isValidHostnameSyntax(h)) pushHost(h, u); } catch(e){ logError(e); } });
 
   // 2) protocol-relative //host/...
   const prx = /(^|[^a-z0-9])\/\/([a-z0-9.-]+)(?=\/|$)/gi;
@@ -895,8 +898,8 @@ window.fetch = async function(...args){
       logEvent('network', { method:'fetch', url });
       const clone = res.clone();
       const hdrs = Array.from(clone.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n');
-      clone.text().then(body=>jsProcessCapture('fetch '+url,hdrs,body)).catch(()=>{});
-    } catch(e){}
+      clone.text().then(body=>jsProcessCapture('fetch '+url,hdrs,body)).catch(e=>logError(e));
+    } catch(e){ logError(e); }
   }
   return res;
 };
@@ -910,7 +913,7 @@ XMLHttpRequest.prototype.send = function(...args){
         const url = this.responseURL || '';
         logEvent('network', { method:'xhr', url });
         jsProcessCapture('xhr '+url,hdrs,body);
-      } catch(e){}
+      } catch(e){ logError(e); }
     }
   });
   return _origSend.apply(this,args);
@@ -993,7 +996,7 @@ function jsPump(){
     })();
 
     if (tgt.inline){
-      try { jsScanText(tgt.file, tgt.node.textContent || ''); } catch {}
+      try { jsScanText(tgt.file, tgt.node.textContent || ''); } catch(e){ logError(e); }
       finalize();
       continue;
     }
@@ -1097,13 +1100,13 @@ rsRefs.pmToggle.onclick=()=>{
             const ivStr = cfg && cfg.iv && cfg.iv.toString ? cfg.iv.toString() : (cfg && cfg.iv ? String(cfg.iv) : '');
             const dataStr = data && data.toString ? data.toString() : String(data);
             addRuntimeLog({ type:'AES.'+fnName, key:keyStr, iv:ivStr, data:dataStr });
-          }catch(e){}
+          }catch(e){ logError(e); }
           return orig.apply(this, arguments);
         };
       };
       wrap('encrypt');
       wrap('decrypt');
-    }catch(e){}
+    }catch(e){ logError(e); }
   })();
 
   // Hook WebSocket send/receive
@@ -1117,13 +1120,13 @@ rsRefs.pmToggle.onclick=()=>{
           addRuntimeLog({ type:'WS.connect', data:String(url||'') });
           const origSend = ws.send;
           ws.send = function(data){
-            try{ addRuntimeLog({ type:'WS.send', data:String(data) }); }catch(e){}
+            try{ addRuntimeLog({ type:'WS.send', data:String(data) }); }catch(e){ logError(e); }
             return origSend.apply(this, arguments);
           };
           ws.addEventListener && ws.addEventListener('message', ev=>{
-            try{ addRuntimeLog({ type:'WS.recv', data:String(ev.data) }); }catch(e){}
+            try{ addRuntimeLog({ type:'WS.recv', data:String(ev.data) }); }catch(e){ logError(e); }
           });
-        }catch(e){}
+        }catch(e){ logError(e); }
         return ws;
       };
     }
@@ -1139,9 +1142,9 @@ rsRefs.pmToggle.onclick=()=>{
           const url = args[0];
           addRuntimeLog({ type:'SSE.connect', data:String(url||'') });
           es.addEventListener && es.addEventListener('message', ev=>{
-            try{ addRuntimeLog({ type:'SSE.message', data:String(ev.data) }); }catch(e){}
+            try{ addRuntimeLog({ type:'SSE.message', data:String(ev.data) }); }catch(e){ logError(e); }
           });
-        }catch(e){}
+        }catch(e){ logError(e); }
         return es;
       };
     }
@@ -1151,13 +1154,13 @@ rsRefs.pmToggle.onclick=()=>{
   (function(){
     const origPM = window.postMessage;
     if (typeof origPM === 'function'){
-      const serialize = msg => { try{ return typeof msg === 'string' ? msg : JSON.stringify(msg); }catch(e){ return String(msg); } };
+      const serialize = msg => { try{ return typeof msg === 'string' ? msg : JSON.stringify(msg); }catch(e){ logError(e); return String(msg); } };
       window.postMessage = function(message, targetOrigin, transfer){
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:serialize(message) }); }catch(e){}
+        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:serialize(message) }); }catch(e){ logError(e); }
         return origPM.apply(this, arguments);
       };
       window.addEventListener && window.addEventListener('message', ev=>{
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin }); }catch(e){}
+        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin }); }catch(e){ logError(e); }
       });
     }
   })();
@@ -1187,7 +1190,7 @@ rsRefs.pmToggle.onclick=()=>{
               out+=String.fromCharCode(code);
             }
             return out;
-          }catch(_e){ return null; }
+          }catch(_e){ logError(_e); return null; }
         };
         const walk = (obj, path)=>{
           if (typeof obj === 'string'){
@@ -1195,7 +1198,7 @@ rsRefs.pmToggle.onclick=()=>{
             const decoded = hexToStr(obj);
             if (decoded){
               let parsed=false;
-              try{ const js=JSON.parse(decoded); parsed=true; walk(js, path); }catch(_e){}
+              try{ const js=JSON.parse(decoded); parsed=true; walk(js, path); }catch(_e){ logError(_e); }
               if (!parsed && matchesSecret(decoded)) addRuntimeLog({ type:'global', key:path, data:decoded });
             }
             return;
@@ -1210,10 +1213,10 @@ rsRefs.pmToggle.onclick=()=>{
         };
         Object.getOwnPropertyNames(window).forEach(name=>{
           if (!nameRx.test(name)) return;
-          let val; try{ val = window[name]; }catch(_e){ return; }
+          let val; try{ val = window[name]; }catch(_e){ logError(_e); return; }
           walk(val, name);
         });
-      }catch(_e){}
+      }catch(_e){ logError(_e); }
     }
     function scanLocalStorage(){
       try{
@@ -1222,7 +1225,7 @@ rsRefs.pmToggle.onclick=()=>{
           const v = localStorage.getItem(k);
           if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog({ type:'localStorage', key:k, data:v });
         }
-      }catch(_e){}
+      }catch(_e){ logError(_e); }
     }
     function scanSessionStorage(){
       try{
@@ -1231,7 +1234,7 @@ rsRefs.pmToggle.onclick=()=>{
           const v = sessionStorage.getItem(k);
           if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog({ type:'sessionStorage', key:k, data:v });
         }
-      }catch(_e){}
+      }catch(_e){ logError(_e); }
     }
     function scanCookies(){
       try{
@@ -1243,7 +1246,7 @@ rsRefs.pmToggle.onclick=()=>{
           const v = idx>=0 ? decodeURIComponent(c.slice(idx+1)) : '';
           if (matchesSecret(v) || matchesSecret(k)) addRuntimeLog({ type:'cookie', key:k, data:v });
         });
-      }catch(_e){}
+      }catch(_e){ logError(_e); }
     }
     const run = ()=>{ scanGlobals(); scanLocalStorage(); scanSessionStorage(); scanCookies(); };
     run();
@@ -1301,7 +1304,7 @@ rsRefs.pmToggle.onclick=()=>{
   }
   function crawlEnqueue(url){
     const u = mkAbs(url); if (!u) return;
-    let p; try{ p = new URL(u); }catch(_e){ return; }
+    let p; try{ p = new URL(u); }catch(_e){ logError(_e); return; }
     if (p.search.slice(1).length > CRAWL.MAX_QUERY_LEN) return;
     if (!crawlAllowed(u)) return;
     const norm = p.origin + p.pathname;
@@ -1315,7 +1318,7 @@ rsRefs.pmToggle.onclick=()=>{
       const pushAttr = (sel, attr)=> doc.querySelectorAll(sel).forEach(el => { const v = el.getAttribute(attr); if (v) crawlEnqueue(new URL(v, baseUrl).href); });
       pushAttr('a[href]', 'href'); pushAttr('[src]', 'src'); pushAttr('form[action]', 'action');
       doc.querySelectorAll('script[src]').forEach(s=>{ const u = new URL(s.getAttribute('src'), baseUrl).href; if (crawlAllowed(u)) cr.assets.push(u); });
-    }catch(_e){}
+    }catch(_e){ logError(_e); }
   }
   function crSetProgress(){
     const total = Number(crRefs.max.value)||0;
@@ -1492,7 +1495,7 @@ rsRefs.pmToggle.onclick=()=>{
     // 2) Externos (.js/.json) realmente usados por la PÁGINA ACTUAL (CDN)
     const extAssets = collectExternalJsFromPage();
     const extHosts = new Map();
-    extAssets.forEach(u=>{ try{ const h=new URL(u).host; if(!extHosts.has(h)) extHosts.set(h,u);}catch{} });
+    extAssets.forEach(u=>{ try{ const h=new URL(u).host; if(!extHosts.has(h)) extHosts.set(h,u);}catch(e){ logError(e); } });
 
     // 3) Construir cola única
     //    - HEAD 1× por host (host actual + hosts externos que SÍ se usan)

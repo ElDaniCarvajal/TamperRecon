@@ -992,15 +992,38 @@ function jsCollectTargets(){
 function jsPump(){
   if (jh.paused) return;
   while (jh.active<JS.MAX_CONCURRENCY && jh.queueIdx<jh.targets.length){
-    const tgt = jh.targets[jh.queueIdx++]; const session = jh.session; jh.active++; jsUpdateStatus();
+    const tgt = jh.targets[jh.queueIdx++];
+    const session = jh.session;
+    jh.active++;
+    jsUpdateStatus();
+
+    const finalize = (()=>{
+      let done = false;
+      return () => {
+        if (done) return;
+        done = true;
+        if (session===jh.session){
+          jh.active--;
+          jsUpdateStatus();
+          setTimeout(jsPump, JS.FETCH_DELAY_MS);
+        }
+      };
+    })();
+
     if (tgt.inline){
       try { jsScanText(tgt.file, tgt.node.textContent || ''); } catch {}
-      jh.active--; jsUpdateStatus(); setTimeout(jsPump, JS.FETCH_DELAY_MS); continue;
+      finalize();
+      continue;
     }
+
     GM_xmlhttpRequest({
-      method:'GET', url:tgt.file, timeout: JS.TIMEOUT_MS,
+      method:'GET',
+      url:tgt.file,
+      timeout: JS.TIMEOUT_MS,
       onload: res => { if (session===jh.session) jsScanText(tgt.file, res.responseText || ''); },
-      onloadend: ()=>{ if (session===jh.session){ jh.active--; jsUpdateStatus(); setTimeout(jsPump, JS.FETCH_DELAY_MS); } }
+      onerror: finalize,
+      ontimeout: finalize,
+      onloadend: finalize
     });
   }
 }

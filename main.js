@@ -152,7 +152,6 @@ if (typeof window !== 'undefined') (function () {
           if (/[^\x20-\x7E]/.test(dec)) return b64;
           return `<span class="ptk-b64" title="${escHTML(dec)}">${b64}</span>`;
         } catch (_e) {
-          logError(_e);
           return b64;
         }
       });
@@ -165,7 +164,6 @@ if (typeof window !== 'undefined') (function () {
         const title = printable ? ` title="${escHTML(dec)}"` : '';
         return `<span class="ptk-hex"${title}>${hex}</span>`;
       } catch (_e) {
-        logError(_e);
         return hex;
       }
     });

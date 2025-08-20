@@ -9,8 +9,69 @@ function scanChunksAndTs(files){
   const endpointRx = /\bhttps?:\/\/[^\s'"<>]+/ig;
   const ipRx = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
   const domainRx = /\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/ig;
+  function extractJsonObjects(text){
+    const results = [];
+    function walk(segment){
+      let i = 0;
+      while(i < segment.length){
+        const ch = segment[i];
+        if (ch === '{'){
+          const end = matchBrace(segment, i);
+          if (end){
+            const obj = segment.slice(i, end);
+            if (/:/.test(obj)){ results.push(obj); walk(obj.slice(1, -1)); }
+            i = end; continue;
+          } else break;
+        } else if (ch === '"' || ch === "'" || ch === '`'){
+          i = skipString(segment, i);
+          continue;
+        } else if (ch === '/' && segment[i+1] === '/'){
+          const n = segment.indexOf('\n', i+2);
+          if (n === -1) break; i = n; continue;
+        } else if (ch === '/' && segment[i+1] === '*'){
+          const n = segment.indexOf('*/', i+2);
+          if (n === -1) break; i = n + 2; continue;
+        }
+        i++;
+      }
+    }
+    function skipString(str, start){
+      const q = str[start];
+      let i = start + 1;
+      while(i < str.length){
+        if (str[i] === '\\'){ i += 2; continue; }
+        if (str[i] === q) return i + 1;
+        i++;
+      }
+      return str.length;
+    }
+    function matchBrace(str, start){
+      let depth = 1;
+      let i = start + 1;
+      let q = null;
+      while(i < str.length){
+        const ch = str[i];
+        if (q){
+          if (ch === '\\'){ i += 2; continue; }
+          if (ch === q) q = null;
+        } else {
+          if (ch === '"' || ch === "'" || ch === '`') q = ch;
+          else if (ch === '/' && str[i+1] === '/'){
+            const n = str.indexOf('\n', i+2); if (n === -1) return str.length; i = n; continue;
+          } else if (ch === '/' && str[i+1] === '*'){
+            const n = str.indexOf('*/', i+2); if (n === -1) return str.length; i = n + 2; continue;
+          } else if (ch === '{') depth++;
+          else if (ch === '}'){ depth--; if (depth === 0) return i + 1; }
+        }
+        i++;
+      }
+      return null;
+    }
+    walk(text);
+    return results;
+  }
   for (const [name, content] of Object.entries(files || {})){
-    if (!/\.ts$|chunk/i.test(name)) continue;
+    if (!/\.ts$|\.js$|chunk/i.test(name)) continue;
     for (const rx of secretPatterns){
       let m; while ((m = rx.exec(content))){ findings.push({ file:name, type:'secret', match:m[0] }); }
       rx.lastIndex = 0;
@@ -27,6 +88,9 @@ function scanChunksAndTs(files){
       findings.push({ file:name, type:'domain', match:m[0] });
     }
     domainRx.lastIndex = 0;
+    for (const obj of extractJsonObjects(content)){
+      findings.push({ file:name, type:'json', match:obj });
+    }
   }
   return findings;
 }

@@ -177,6 +177,10 @@ if (typeof window !== 'undefined') (function () {
     const t = String(txt||'').slice(0,400).toLowerCase();
     return /(404|not found|page not found|p[aá]gina no encontrada|no encontrado|does not exist)/.test(t);
   };
+  const withTimeout = (p, ms) => Promise.race([
+    p,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+  ]);
   const IGNORE_EXT = /\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff|woff2?|eot|ttf|otf|css|map|mp4|webm|mp3|wav|ogg|m4a|mov|avi)(\?|#|$)/i;
   const PAGE_LIKE  = /\.(?:html?|php|aspx?|jsp|cfm|md|txt|xml|json)(\?|#|$)/i;
   const SCRIPT_LIKE= /\.(?:js)(\?|#|$)/i;
@@ -896,7 +900,9 @@ window.fetch = async function(...args){
       logEvent('network', { method:'fetch', url });
       const clone = res.clone();
       const hdrs = Array.from(clone.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n');
-      clone.text().then(body=>jsProcessCapture('fetch '+url,hdrs,body)).catch(e=>logError(e));
+      withTimeout(clone.text(), JS.TIMEOUT_MS)
+        .then(body=>jsProcessCapture('fetch '+url,hdrs,body))
+        .catch(e=>logError(e));
     } catch(e){ logError(e); }
   }
   return res;

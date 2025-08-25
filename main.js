@@ -113,17 +113,37 @@ function createGlobalViewer(win, baseNames){
 
   const container = doc.createElement('div');
   const output = doc.createElement('pre');
+  output.style.whiteSpace = 'pre-wrap';
+  output.style.maxHeight = '200px';
+  output.style.overflow = 'auto';
+  output.style.background = '#fff';
+  output.style.color = '#000';
+  output.style.padding = '4px';
 
   const names = Object.getOwnPropertyNames(win).filter(name => !baseline.has(name));
   names.forEach(name => {
     const btn = doc.createElement('button');
-    btn.textContent = name;
+    const value = win[name];
+    const type = typeof value;
+    btn.textContent = type === 'function' ? `${name} (function)` : `${name} (${type})`;
     btn.addEventListener('click', () => {
-      let result;
       try {
-        const value = win[name];
-        result = typeof value === 'function' ? value() : value;
-        output.textContent = JSON.stringify(result, null, 2);
+        const v = win[name];
+        if (typeof v === 'function') {
+          output.textContent = v.toString();
+        } else if (v && typeof v === 'object') {
+          try {
+            const props = Object.getOwnPropertyNames(v).map(k => {
+              const t = typeof v[k] === 'function' ? 'method' : typeof v[k];
+              return `${k} (${t})`;
+            });
+            output.textContent = props.join('\n');
+          } catch (_e) {
+            output.textContent = JSON.stringify(v, null, 2);
+          }
+        } else {
+          output.textContent = JSON.stringify(v, null, 2);
+        }
       } catch (e) {
         output.textContent = 'Error: ' + e.message;
       }
@@ -134,9 +154,45 @@ function createGlobalViewer(win, baseNames){
   return { container, output };
 }
 
+function analyzeCodeSymbols(code){
+  const symbols = [];
+  const add = (name, type) => { if (name) symbols.push({ name, type }); };
+
+  const varRx = /\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)/g;
+  let m;
+  while ((m = varRx.exec(code))) add(m[1], 'variable');
+
+  const fnRx = /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  while ((m = fnRx.exec(code))) add(m[1], 'function');
+
+  const objMethodRx = /([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:function\s*)?\(/g;
+  while ((m = objMethodRx.exec(code))) add(m[1], 'method');
+
+  const objShorthandRx = /(?:\{|,)\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*{/g;
+  while ((m = objShorthandRx.exec(code))) add(m[1], 'method');
+
+  const classRx = /class\s+[A-Za-z_$][\w$]*\s*{([\s\S]*?)}/g;
+  let cls;
+  while ((cls = classRx.exec(code))){
+    const body = cls[1];
+    const classMethodRx = /(?:^|;|\s)([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*{/g;
+    let mm;
+    while ((mm = classMethodRx.exec(body))) add(mm[1], 'method');
+  }
+
+  const seen = new Set();
+  return symbols.filter(s => {
+    const key = `${s.type}:${s.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports){
   module.exports.scanChunksAndTs = scanChunksAndTs;
   module.exports.createGlobalViewer = createGlobalViewer;
+  module.exports.analyzeCodeSymbols = analyzeCodeSymbols;
 }
 
 // ==UserScript==

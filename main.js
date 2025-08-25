@@ -123,8 +123,11 @@ function createGlobalViewer(win, baseNames){
     padding:'4px'
   });
 
-  const names = Object.getOwnPropertyNames(win).filter(name => !baseline.has(name));
-  names.forEach(name => {
+  const seen = new Set(baseline);
+
+  const addBtn = name => {
+    if (seen.has(name)) return;
+    seen.add(name);
     const btn = doc.createElement('button');
     const value = win[name];
     const type = typeof value;
@@ -188,7 +191,29 @@ function createGlobalViewer(win, baseNames){
       }
     });
     container.appendChild(btn);
-  });
+  };
+
+  const scan = () => {
+    try { Object.getOwnPropertyNames(win).forEach(addBtn); } catch(_e){}
+  };
+  scan();
+  win.setInterval && win.setInterval(scan, 1000);
+
+  win.__TR_GV_ADDERS = win.__TR_GV_ADDERS || [];
+  win.__TR_GV_ADDERS.push(addBtn);
+
+  const origDefineProperty = Object.defineProperty;
+  if (!origDefineProperty.__TR_GV_WRAPPED__) {
+    const wrapper = function(obj, prop, desc){
+      if (obj === win) {
+        const name = String(prop);
+        (win.__TR_GV_ADDERS || []).forEach(cb => cb(name));
+      }
+      return origDefineProperty.apply(this, arguments);
+    };
+    wrapper.__TR_GV_WRAPPED__ = true;
+    Object.defineProperty = wrapper;
+  }
 
   return { container, output };
 }

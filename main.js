@@ -496,25 +496,27 @@ if (typeof window !== 'undefined') (function () {
       <div class="ptk-hdr">Pentest Toolkit — ${location.hostname}</div>
       <div class="ptk-grid"><button id="ptk_toggle" class="ptk-btn">Ocultar</button></div>
     </div>
-    <div class="ptk-tabs" id="tabs">
-      <div class="ptk-tab active" data-tab="files">Files</div>
-      <div class="ptk-tab" data-tab="js">JS Hunter</div>
-      <div class="ptk-tab" data-tab="runtime">Runtime Secrets</div>
-      <div class="ptk-tab" data-tab="crawler">Crawler</div>
-      <div class="ptk-tab" data-tab="versions">Versions</div>
-      <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
-      <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
-      <div class="ptk-tab" data-tab="errors">Errors</div>
-    </div>
-    <section id="tab_files"></section>
-    <section id="tab_js" style="display:none"></section>
-    <section id="tab_runtime" style="display:none"></section>
-    <section id="tab_crawler" style="display:none"></section>
-    <section id="tab_versions" style="display:none"></section>
-    <section id="tab_fuzzer" style="display:none"></section>
-    <section id="tab_buckets" style="display:none"></section>
-    <section id="tab_errors" style="display:none"></section>
-  `;
+      <div class="ptk-tabs" id="tabs">
+        <div class="ptk-tab active" data-tab="files">Files</div>
+        <div class="ptk-tab" data-tab="js">JS Hunter</div>
+        <div class="ptk-tab" data-tab="runtime">Runtime Secrets</div>
+        <div class="ptk-tab" data-tab="crawler">Crawler</div>
+        <div class="ptk-tab" data-tab="versions">Versions</div>
+        <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
+        <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
+        <div class="ptk-tab" data-tab="hard">Hardening</div>
+        <div class="ptk-tab" data-tab="errors">Errors</div>
+      </div>
+      <section id="tab_files"></section>
+      <section id="tab_js" style="display:none"></section>
+      <section id="tab_runtime" style="display:none"></section>
+      <section id="tab_crawler" style="display:none"></section>
+      <section id="tab_versions" style="display:none"></section>
+      <section id="tab_fuzzer" style="display:none"></section>
+      <section id="tab_buckets" style="display:none"></section>
+      <section id="tab_hard" style="display:none"></section>
+      <section id="tab_errors" style="display:none"></section>
+      `;
   root.appendChild(panel);
 
   const pill = document.createElement('div');
@@ -563,7 +565,7 @@ if (typeof window !== 'undefined') (function () {
   updateRuntimeBadge();
   updateErrorBadge();
   function showTab(name){
-    ['files','js','runtime','crawler','versions','fuzzer','buckets','errors'].forEach(t=>{
+      ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','errors'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
       const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
@@ -2216,13 +2218,176 @@ rsRefs.pmToggle.onclick=()=>{
   }
   bkRefs.scan.onclick=bkScan;
   bkRefs.clear.onclick=()=>{ bk.findings.length=0; bk.candidates.length=0; bk.resSet.clear(); bk.candSet.clear(); bkRefs.results.innerHTML=''; bkRefs.status.textContent='En espera…'; pillBkTxt.textContent='—'; pillBkBar.style.width='0%'; };
-  bkRefs.csv.onclick=()=>{ const head=['provider','bucket','account','container','region','file','line','url','status','note']; csvDownload(`buckets_${nowStr()}.csv`, head, bk.findings.map(x=>({provider:x.provider||'',bucket:x.bucket||'',account:x.account||'',container:x.container||'',region:x.region||'',file:x.file||'',line:(typeof x.line==='number'?(x.line+1):''),url:x.url,status:x.status,note:x.note}))); };
+    bkRefs.csv.onclick=()=>{ const head=['provider','bucket','account','container','region','file','line','url','status','note']; csvDownload(`buckets_${nowStr()}.csv`, head, bk.findings.map(x=>({provider:x.provider||'',bucket:x.bucket||'',account:x.account||'',container:x.container||'',region:x.region||'',file:x.file||'',line:(typeof x.line==='number'?(x.line+1):''),url:x.url,status:x.status,note:x.note}))); };
 
-  /* ============================
-     AUTOSTARTS (opcionales)
-  ============================ */
-  if (FILES.AUTO_START) setTimeout(()=>tabFiles.querySelector('#sf_start').click(), 700);
-  if (JS.AUTO_START) setTimeout(()=>tabJS.querySelector('#js_start').click(), 900);
+    /* ============================
+       Hardening Checks
+    ============================ */
+    const tabHard = panel.querySelector('#tab_hard');
+    tabHard.innerHTML = `
+      <div class="ptk-box">
+        <div class="ptk-flex">
+          <div class="ptk-hdr">Misconfigs & Hardening</div>
+          <div class="ptk-grid">
+            <button id="hd_run" class="ptk-btn">Check</button>
+            <button id="hd_clear" class="ptk-btn">Clear</button>
+          </div>
+        </div>
+        <div id="hd_results"></div>
+      </div>`;
+    const hdRefs = { results: tabHard.querySelector('#hd_results') };
+    function hdAuditCookies(){
+      return new Promise(resolve=>{
+        const list = document.cookie ? document.cookie.split(/;\s*/) : [];
+        GM_xmlhttpRequest({
+          method:'GET', url: location.href, headers:{'Cache-Control':'no-cache'},
+          onload: res=>{
+            const hdrs = res.responseHeaders || '';
+            const setCookies = hdrs.match(/^set-cookie:[^\n]+/gim) || [];
+            const parsed = setCookies.map(line=>{
+              const m = /^set-cookie:\s*([^=]+)=.*$/i.exec(line);
+              const attrs = line.split(':').slice(1).join(':');
+              return { name:m?m[1].trim():'' , attrs };
+            });
+            const out = list.map(c=>{
+              const name = c.split('=')[0];
+              const sc = parsed.find(p=>p.name===name);
+              const info = { name, secure:false, sameSite:null, prefix:null, longExpiry:false };
+              info.prefix = name.startsWith('__Host-')?'__Host-':name.startsWith('__Secure-')?'__Secure-':null;
+              if (sc){
+                info.secure = /;\s*secure/i.test(sc.attrs);
+                const sm = /;\s*samesite=([^;]+)/i.exec(sc.attrs);
+                info.sameSite = sm?sm[1]:null;
+                const em = /;\s*expires=([^;]+)/i.exec(sc.attrs);
+                if (em){
+                  const d = new Date(em[1]);
+                  if (d - Date.now() > 1000*60*60*24*365) info.longExpiry = true;
+                }
+              }
+              return info;
+            });
+            resolve(out);
+          },
+          onerror: _=> resolve(list.map(c=>({ name:c.split('=')[0] })))
+        });
+      });
+    }
+    function hdCheckHeaders(){
+      return new Promise(resolve=>{
+        GM_xmlhttpRequest({
+          method:'GET', url: location.href, headers:{'Cache-Control':'no-cache'},
+          onload: res=>{
+            const hdrs = res.responseHeaders || '';
+            const has = h=>new RegExp('^'+h+':','im').test(hdrs);
+            resolve({
+              csp: has('content-security-policy'),
+              xfo: has('x-frame-options'),
+              hsts: has('strict-transport-security'),
+              corp: has('cross-origin-resource-policy'),
+              coop: has('cross-origin-opener-policy'),
+              coep: has('cross-origin-embedder-policy')
+            });
+          },
+          onerror: _=> resolve(null)
+        });
+      });
+    }
+    function hdCheckSRI(){
+      const miss = [];
+      document.querySelectorAll('script[src]').forEach(s=>{ if(!s.integrity) miss.push(s.src); });
+      return miss;
+    }
+    function hdTestCORS(){
+      return new Promise(resolve=>{
+        const evil = 'https://evil.example';
+        GM_xmlhttpRequest({
+          method:'OPTIONS', url: location.href,
+          headers:{
+            'Origin': evil,
+            'Access-Control-Request-Method':'POST',
+            'Access-Control-Request-Headers':'X-Test'
+          },
+          onload: res=>{
+            const hdrs = res.responseHeaders || '';
+            const grab = n=>{ const m = new RegExp('^'+n+':\s*([^\n]+)','im').exec(hdrs); return m?m[1].trim():null; };
+            resolve({
+              allowOrigin: grab('access-control-allow-origin'),
+              allowCreds: /access-control-allow-credentials:\s*true/i.test(hdrs),
+              allowHeaders: grab('access-control-allow-headers'),
+              allowMethods: grab('access-control-allow-methods')
+            });
+          },
+          onerror: _=> resolve(null)
+        });
+      });
+    }
+    function hdTestClick(){
+      return new Promise(resolve=>{
+        const iframe = document.createElement('iframe');
+        iframe.style.position='absolute';
+        iframe.style.left='-9999px';
+        iframe.src = location.href + (location.href.includes('?')?'&':'?')+'tr_iframe='+Date.now();
+        iframe.onload=()=>{
+          let ok=false;
+          try{ ok = iframe.contentWindow.location.href !== 'about:blank'; }
+          catch(e){ ok=false; }
+          iframe.remove();
+          resolve(ok);
+        };
+        document.body.appendChild(iframe);
+        setTimeout(()=>{ try{iframe.remove();}catch(_e){}; resolve(false); },8000);
+      });
+    }
+    tabHard.querySelector('#hd_run').addEventListener('click', async ()=>{
+      hdRefs.results.innerHTML='<div class="ptk-row">Checking…</div>';
+      const [cookies, headers, cors, frameOk] = await Promise.all([
+        hdAuditCookies(), hdCheckHeaders(), hdTestCORS(), hdTestClick()
+      ]);
+      const sri = hdCheckSRI();
+      const res = hdRefs.results; res.innerHTML='';
+      const cDiv = document.createElement('div');
+      cDiv.className='ptk-row';
+      if (cookies && cookies.length){
+        cDiv.innerHTML='<div class="ptk-hdr">Cookies</div><ul>'+cookies.map(c=>{
+          const warns=[];
+          if (!c.secure) warns.push('Secure');
+          if (!c.sameSite) warns.push('SameSite');
+          if (!c.prefix) warns.push('prefix');
+          if (c.longExpiry) warns.push('long-exp');
+          return `<li>${escHTML(c.name)}${warns.length?': '+warns.join(' | '):' OK'}</li>`;
+        }).join('')+'</ul>';
+      } else cDiv.innerHTML='<div class="ptk-hdr">Cookies</div><div>Ninguna</div>';
+      res.appendChild(cDiv);
+      const hDiv=document.createElement('div');
+      hDiv.className='ptk-row';
+      hDiv.innerHTML=`<div class="ptk-hdr">Headers</div>
+        <div>CSP: ${headers&&headers.csp?'OK':'MISSING'}</div>
+        <div>XFO: ${headers&&headers.xfo?'OK':'MISSING'}</div>
+        <div>HSTS: ${headers&&headers.hsts?'OK':'MISSING'}</div>
+        <div>CORP: ${headers&&headers.corp?'OK':'MISSING'}</div>
+        <div>COOP: ${headers&&headers.coop?'OK':'MISSING'}</div>
+        <div>COEP: ${headers&&headers.coep?'OK':'MISSING'}</div>`;
+      res.appendChild(hDiv);
+      const sDiv=document.createElement('div');
+      sDiv.className='ptk-row';
+      sDiv.innerHTML='<div class="ptk-hdr">SRI</div>'+(sri.length?`<ul>${sri.map(s=>`<li>${escHTML(s)}</li>`).join('')}</ul>`:'<div>All scripts have integrity</div>');
+      res.appendChild(sDiv);
+      const coDiv=document.createElement('div');
+      coDiv.className='ptk-row';
+      coDiv.innerHTML='<div class="ptk-hdr">CORS</div>'+(cors?`<div>ACAO=${escHTML(cors.allowOrigin||'n/a')} ACAC=${cors.allowCreds} A C A H=${escHTML(cors.allowHeaders||'')} A C A M=${escHTML(cors.allowMethods||'')}</div>`:'<div>Error</div>');
+      res.appendChild(coDiv);
+      const cjDiv=document.createElement('div');
+      cjDiv.className='ptk-row';
+      cjDiv.innerHTML=`<div class="ptk-hdr">Clickjacking</div><div>${frameOk?'Framable':'Blocked'}</div>`;
+      res.appendChild(cjDiv);
+    });
+    tabHard.querySelector('#hd_clear').addEventListener('click',()=>{ hdRefs.results.innerHTML=''; });
+
+    /* ============================
+       AUTOSTARTS (opcionales)
+    ============================ */
+    if (FILES.AUTO_START) setTimeout(()=>tabFiles.querySelector('#sf_start').click(), 700);
+    if (JS.AUTO_START) setTimeout(()=>tabJS.querySelector('#js_start').click(), 900);
 
   if (typeof window !== 'undefined'){
     window.addEventListener('error', e => {

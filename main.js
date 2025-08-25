@@ -88,15 +88,55 @@ function scanChunksAndTs(files){
       findings.push({ file:name, type:'domain', match:m[0] });
     }
     domainRx.lastIndex = 0;
-    for (const obj of extractJsonObjects(content)){
+  for (const obj of extractJsonObjects(content)){
       findings.push({ file:name, type:'json', match:obj });
     }
   }
   return findings;
 }
 
+function createGlobalViewer(win, baseNames){
+  win = win || (typeof window !== 'undefined' ? window : global);
+  const doc = win.document;
+  if (!doc || !doc.createElement || !doc.body) return null;
+
+  let baseline = new Set(baseNames || []);
+  if (!baseNames){
+    try {
+      const iframe = doc.createElement('iframe');
+      iframe.style.display = 'none';
+      doc.body.appendChild(iframe);
+      baseline = new Set(Object.getOwnPropertyNames(iframe.contentWindow));
+      doc.body.removeChild(iframe);
+    } catch(_e) {}
+  }
+
+  const container = doc.createElement('div');
+  const output = doc.createElement('pre');
+
+  const names = Object.getOwnPropertyNames(win).filter(name => !baseline.has(name));
+  names.forEach(name => {
+    const btn = doc.createElement('button');
+    btn.textContent = name;
+    btn.addEventListener('click', () => {
+      let result;
+      try {
+        const value = win[name];
+        result = typeof value === 'function' ? value() : value;
+        output.textContent = JSON.stringify(result, null, 2);
+      } catch (e) {
+        output.textContent = 'Error: ' + e.message;
+      }
+    });
+    container.appendChild(btn);
+  });
+
+  return { container, output };
+}
+
 if (typeof module !== 'undefined' && module.exports){
   module.exports.scanChunksAndTs = scanChunksAndTs;
+  module.exports.createGlobalViewer = createGlobalViewer;
 }
 
 // ==UserScript==
@@ -1089,6 +1129,22 @@ rsRefs.pmToggle.onclick=()=>{
   capturePostMessage = !capturePostMessage;
   rsRefs.pmToggle.textContent = capturePostMessage ? 'Pausar postMessage' : 'Reanudar postMessage';
 };
+
+{ // Global variables/functions viewer
+  try {
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    const base = new Set(Object.getOwnPropertyNames(iframe.contentWindow));
+    document.body.removeChild(iframe);
+    ['scanChunksAndTs','createGlobalViewer'].forEach(n => base.add(n));
+    const gv = createGlobalViewer(window, base);
+    if (gv) {
+      tabRuntime.appendChild(gv.container);
+      tabRuntime.appendChild(gv.output);
+    }
+  } catch(e){ logError(e); }
+}
 
   // Hook CryptoJS AES encrypt/decrypt
   (function(){

@@ -112,35 +112,74 @@ function createGlobalViewer(win, baseNames){
   }
 
   const container = doc.createElement('div');
+  Object.assign(container.style, { background:'#1e1e1e', color:'#fff', padding:'4px' });
   const output = doc.createElement('pre');
-  output.style.whiteSpace = 'pre-wrap';
-  output.style.maxHeight = '200px';
-  output.style.overflow = 'auto';
-  output.style.background = '#fff';
-  output.style.color = '#000';
-  output.style.padding = '4px';
+  Object.assign(output.style, {
+    whiteSpace:'pre-wrap',
+    maxHeight:'200px',
+    overflow:'auto',
+    background:'#1e1e1e',
+    color:'#fff',
+    padding:'4px'
+  });
 
   const names = Object.getOwnPropertyNames(win).filter(name => !baseline.has(name));
   names.forEach(name => {
     const btn = doc.createElement('button');
     const value = win[name];
     const type = typeof value;
-    btn.textContent = type === 'function' ? `${name} (function)` : `${name} (${type})`;
+    const desc = Object.getOwnPropertyDescriptor(win, name) || {};
+    let label = type;
+    if (type !== 'function' && desc.writable === false) label = 'const';
+    btn.textContent = type === 'function' ? `${name} (function)` : `${name} (${label})`;
+    Object.assign(btn.style, {
+      margin:'2px',
+      background:'#333',
+      color:'#fff',
+      border:'1px solid #555',
+      cursor:'pointer'
+    });
     btn.addEventListener('click', () => {
       try {
         const v = win[name];
         if (typeof v === 'function') {
-          output.textContent = v.toString();
+          let res;
+          try { res = v(); } catch(fnErr){ res = fnErr; }
+          output.textContent = String(res);
         } else if (v && typeof v === 'object') {
-          try {
-            const props = Object.getOwnPropertyNames(v).map(k => {
-              const t = typeof v[k] === 'function' ? 'method' : typeof v[k];
-              return `${k} (${t})`;
+          const showObject = obj => {
+            output.innerHTML = '';
+            Reflect.ownKeys(obj).forEach(key => {
+              const val = obj[key];
+              const t2 = typeof val;
+              const propBtn = doc.createElement('button');
+              propBtn.textContent = t2 === 'function' ? `${String(key)} (method)` : `${String(key)} (${t2})`;
+              Object.assign(propBtn.style, {
+                margin:'2px',
+                background:'#333',
+                color:'#fff',
+                border:'1px solid #555',
+                cursor:'pointer'
+              });
+              propBtn.addEventListener('click', () => {
+                try {
+                  if (typeof val === 'function') {
+                    let r;
+                    try { r = val.call(obj); } catch(e){ r = e; }
+                    output.textContent = String(r);
+                  } else if (val && typeof val === 'object') {
+                    showObject(val);
+                  } else {
+                    output.textContent = JSON.stringify(val, null, 2);
+                  }
+                } catch(e){
+                  output.textContent = 'Error: ' + e.message;
+                }
+              });
+              output.appendChild(propBtn);
             });
-            output.textContent = props.join('\n');
-          } catch (_e) {
-            output.textContent = JSON.stringify(v, null, 2);
-          }
+          };
+          showObject(v);
         } else {
           output.textContent = JSON.stringify(v, null, 2);
         }

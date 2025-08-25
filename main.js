@@ -2234,3 +2234,248 @@ rsRefs.pmToggle.onclick=()=>{
   }
 
 })();
+
+/* ==============================================
+   CaptureCore: unified hooking & export
+   Hooks fetch, XHR, WebSocket, EventSource,
+   postMessage, BroadcastChannel and ServiceWorkers.
+   Provides exporters to HAR/JSON/CSV/Markdown and
+   simple domain filtering.
+=============================================== */
+(function(global){
+  const records = [];
+  let domainFilter = null;
+  const dangerPatterns = [
+    /\b[A-Za-z0-9-_]{20,}\.[A-Za-z0-9-_]{20,}\.[A-Za-z0-9-_]{20,}\b/,
+    /\b(?:token|jwt|bearer|secret|key)\b/i,
+    /https?:\/\/[^\s'\"]+/i
+  ];
+  function shouldLog(url){
+    if (!url) return false;
+    if (!domainFilter) return true;
+    try{
+      const u = new URL(url, location.href);
+      return u.hostname.endsWith(domainFilter);
+    }catch(_e){ return false; }
+  }
+  function push(rec){
+    if (rec.url && !shouldLog(rec.url)) return;
+    records.push(rec);
+  }
+  function headersToObj(headers){
+    const obj={};
+    if (headers){
+      if (typeof headers.forEach==='function'){
+        headers.forEach((v,k)=>obj[k]=v);
+      }else if (Array.isArray(headers)){
+        headers.forEach(([k,v])=>obj[k]=v);
+      }else{
+        Object.entries(headers).forEach(([k,v])=>obj[k]=v);
+      }
+    }
+    return obj;
+  }
+
+  const origFetch = global.fetch;
+  if (typeof origFetch === 'function'){
+    global.fetch = async function(input, init){
+      const url = (typeof input === 'string') ? input : (input && input.url) || '';
+      const method = (init && init.method) || (input && input.method) || 'GET';
+      const reqHdrs = headersToObj((init && init.headers) || (input && input.headers));
+      const reqBody = (init && init.body) || '';
+      const start = performance.now();
+      const res = await origFetch.apply(this, arguments);
+      const end = performance.now();
+      const clone = res.clone();
+      const resHdrs = headersToObj(clone.headers);
+      const text = await clone.text().catch(()=> '');
+      push({
+        type:'fetch',
+        url, method,
+        request:{ headers:reqHdrs, body:reqBody },
+        response:{ status:res.status, headers:resHdrs, body:text, size:text.length },
+        time:end-start
+      });
+      return res;
+    };
+  }
+
+  const origXHROpen = XMLHttpRequest.prototype.open;
+  const origXHRSend = XMLHttpRequest.prototype.send;
+  const origXHRSetHdr = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.open = function(method, url){
+    this._tr_method = method;
+    this._tr_url = url;
+    this._tr_headers = {};
+    return origXHROpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.setRequestHeader = function(k,v){
+    this._tr_headers[k]=v;
+    return origXHRSetHdr.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.send = function(body){
+    const start = performance.now();
+    this.addEventListener('loadend', ()=>{
+      const end = performance.now();
+      try{
+        push({
+          type:'xhr',
+          url:this._tr_url,
+          method:this._tr_method,
+          request:{ headers:this._tr_headers, body:body || '' },
+          response:{ status:this.status, headers:parseHeaders(this.getAllResponseHeaders()), body:this.responseText, size:(this.responseText||'').length },
+          time:end-start
+        });
+      }catch(e){ console.error(e); }
+    });
+    return origXHRSend.apply(this, arguments);
+  };
+  function parseHeaders(str){
+    const out={};
+    (str||'').trim().split(/\r?\n/).forEach(line=>{
+      const i=line.indexOf(':');
+      if(i>0) out[line.slice(0,i).trim().toLowerCase()]=line.slice(i+1).trim();
+    });
+    return out;
+  }
+
+  const OrigWS = global.WebSocket;
+  if (typeof OrigWS === 'function'){
+    global.WebSocket = function(...args){
+      const ws = new OrigWS(...args);
+      const url = args[0];
+      push({ type:'ws.connect', url });
+      const origSend = ws.send;
+      ws.send = function(data){
+        push({ type:'ws.send', url, data:String(data) });
+        return origSend.apply(this, arguments);
+      };
+      ws.addEventListener('message', ev=>{
+        push({ type:'ws.recv', url, data:String(ev.data) });
+      });
+      return ws;
+    };
+  }
+
+  const OrigES = global.EventSource;
+  if (typeof OrigES === 'function'){
+    global.EventSource = function(...args){
+      const es = new OrigES(...args);
+      const url = args[0];
+      push({ type:'es.connect', url });
+      es.addEventListener('message', ev=>{
+        push({ type:'es.message', url, data:String(ev.data) });
+      });
+      return es;
+    };
+  }
+
+  (function(){
+    const origPM = global.postMessage;
+    if (typeof origPM === 'function'){
+      global.postMessage = function(msg, targetOrigin, transfer){
+        detect('postMessage.send', msg, { target: targetOrigin });
+        return origPM.apply(this, arguments);
+      };
+      global.addEventListener('message', ev=>{
+        detect('postMessage.receive', ev.data, { origin: ev.origin });
+      });
+    }
+  })();
+
+  (function(){
+    const OrigBC = global.BroadcastChannel;
+    if (typeof OrigBC === 'function'){
+      global.BroadcastChannel = function(name){
+        const bc = new OrigBC(name);
+        bc.addEventListener('message', ev=>{
+          detect('broadcast.receive', ev.data, { channel: name });
+        });
+        const origPost = bc.postMessage;
+        bc.postMessage = function(data){
+          detect('broadcast.send', data, { channel: name });
+          return origPost.apply(this, arguments);
+        };
+        return bc;
+      };
+    }
+  })();
+
+  function detect(type, data, extra){
+    try{
+      const str = typeof data === 'string' ? data : JSON.stringify(data);
+      const matches = dangerPatterns.filter(rx=>rx.test(str)).map(rx=>rx.source);
+      push(Object.assign({ type, data:str, matches }, extra||{}));
+    }catch(e){ console.error(e); }
+  }
+
+  async function scanServiceWorkers(){
+    if (!('serviceWorker' in navigator)) return;
+    try{
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const reg of regs){
+        const url = reg.active && reg.active.scriptURL;
+        let text = '';
+        if (url){
+          try{ text = await fetch(url).then(r=>r.text()); }catch(_e){}
+        }
+        const hasCachePut = /cache\.put|caches\.open/gi.test(text);
+        push({ type:'serviceWorker', url, hasCachePut, size:text.length });
+      }
+    }catch(e){ console.error(e); }
+  }
+  scanServiceWorkers();
+
+  function exportJSON(){
+    return JSON.stringify(getRecords(), null, 2);
+  }
+  function exportCSV(){
+    const rows = getRecords().map(r=>[
+      r.type, r.method||'', r.url||'', r.response && r.response.status || '', r.time||'', r.response && r.response.size || ''
+    ].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+    rows.unshift('type,method,url,status,time,size');
+    return rows.join('\n');
+  }
+  function exportMarkdown(){
+    const rows = getRecords().map(r=>`|${r.type}|${r.method||''}|${r.url||''}|${r.response&&r.response.status||''}|${r.time||''}|${r.response&&r.response.size||''}|`);
+    rows.unshift('|type|method|url|status|time|size|','|---|---|---|---|---|---|');
+    return rows.join('\n');
+  }
+  function exportHAR(){
+    const entries = getRecords().filter(r=>r.type==='fetch'||r.type==='xhr').map(r=>({
+      startedDateTime:new Date().toISOString(),
+      time:r.time||0,
+      request:{
+        method:r.method,
+        url:r.url,
+        headers:objToHarArr(r.request && r.request.headers),
+        bodySize:(r.request && r.request.body && r.request.body.length)||0,
+        postData:{ text:r.request && r.request.body || '' }
+      },
+      response:{
+        status:r.response && r.response.status || 0,
+        statusText:'',
+        headers:objToHarArr(r.response && r.response.headers),
+        content:{ size:r.response && r.response.size || 0, text:r.response && r.response.body || '' }
+      }
+    }));
+    return JSON.stringify({ log:{ version:'1.2', creator:{ name:'TamperRecon' }, entries } }, null, 2);
+  }
+  function objToHarArr(obj){
+    const arr=[];
+    obj = obj||{};
+    Object.keys(obj).forEach(k=>arr.push({name:k, value:obj[k]}));
+    return arr;
+  }
+  function getRecords(){
+    if (!domainFilter) return records.slice();
+    return records.filter(r=>{
+      if (!r.url) return false;
+      try{ return new URL(r.url, location.href).hostname.endsWith(domainFilter); }catch(_e){ return false; }
+    });
+  }
+  function setDomainFilter(domain){ domainFilter = domain || null; }
+
+  global.TRCore = { records, exportJSON, exportCSV, exportMarkdown, exportHAR, setDomainFilter };
+})(typeof window !== 'undefined' ? window : globalThis);
+

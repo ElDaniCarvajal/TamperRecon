@@ -2479,3 +2479,55 @@ rsRefs.pmToggle.onclick=()=>{
   global.TRCore = { records, exportJSON, exportCSV, exportMarkdown, exportHAR, setDomainFilter };
 })(typeof window !== 'undefined' ? window : globalThis);
 
+/* ============================
+   RECONNAISSANCE HELPERS
+============================ */
+(function(global){
+  'use strict';
+  const SOURCE_MAP_EXT = '.map';
+  async function discoverSourceMap(scriptUrl, fetcher){
+    const out = { names:new Set(), sources:new Set() };
+    try{
+      fetcher = fetcher || (u=>fetch(u).then(r=>r.ok?r.text():''));
+      const mapUrl = scriptUrl + SOURCE_MAP_EXT;
+      const mapText = await fetcher(mapUrl);
+      const map = JSON.parse(mapText);
+      if (Array.isArray(map.names)) map.names.forEach(n=>n && out.names.add(n));
+      if (Array.isArray(map.sources)) map.sources.forEach(p=>p && out.sources.add(p));
+    }catch(_e){/* ignore */}
+    return out;
+  }
+  function mineParams(text){
+    const params = new Set();
+    if (!text) return params;
+    const urlRx = /[?&]([a-zA-Z0-9_\-]+)=/g; let m;
+    while((m=urlRx.exec(text))) params.add(m[1]);
+    const attrRx = /name=["']?([a-zA-Z0-9_\-:]+)/g;
+    while((m=attrRx.exec(text))) params.add(m[1]);
+    const jsRx = /[\{,]\s*([a-zA-Z0-9_\-]+)\s*:/g;
+    while((m=jsRx.exec(text))) params.add(m[1]);
+    return params;
+  }
+  function detectSPARoutes(js){
+    const routes = new Set();
+    if (!js) return routes;
+    const pathRx = /path\s*:\s*['"]([^'"?#]+)['"]/g;
+    const whenRx = /\.when\(\s*['"]([^'"?#]+)['"]/g; let m;
+    while((m=pathRx.exec(js))) routes.add(m[1]);
+    while((m=whenRx.exec(js))) routes.add(m[1]);
+    return routes;
+  }
+  function virtualCrawl(base, routes){
+    const out=[]; if (!base) return out; routes = routes || [];
+    for(const r of routes){
+      try{ const u=new URL(r, base).href; out.push(u); }
+      catch(_e){/* ignore */}
+    }
+    return out;
+  }
+  global.TRRecon = { discoverSourceMap, mineParams, detectSPARoutes, virtualCrawl };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+if (typeof module !== 'undefined' && module.exports){
+  module.exports = { TRCore: globalThis.TRCore, TRRecon: globalThis.TRRecon };
+}

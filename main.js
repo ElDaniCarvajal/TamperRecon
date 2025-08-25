@@ -296,7 +296,14 @@ if (typeof window !== 'undefined') (function () {
      Utils
   ============================ */
   const unique = arr => Array.from(new Set(arr));
-  const logError = e => console.error('TamperRecon error:', e);
+  const errorLog = [];
+  let renderErrors = () => {};
+  function logError(e){
+    const msg = e && e.message ? e.message : String(e);
+    errorLog.push({ time: new Date().toISOString(), message: msg });
+    console.error('TamperRecon error:', e);
+    try { renderErrors(); } catch(_e) {}
+  }
   const sameOrigin = url => { try { return new URL(url, location.origin).origin === location.origin; } catch(e){ logError(e); return false; } };
   const mkAbs = p => { try { return new URL(p, location.href).href; } catch(e){ logError(e); return null; } };
   const escCSV = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
@@ -497,6 +504,7 @@ if (typeof window !== 'undefined') (function () {
       <div class="ptk-tab" data-tab="versions">Versions</div>
       <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
       <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
+      <div class="ptk-tab" data-tab="errors">Errors</div>
     </div>
     <section id="tab_files"></section>
     <section id="tab_js" style="display:none"></section>
@@ -505,6 +513,7 @@ if (typeof window !== 'undefined') (function () {
     <section id="tab_versions" style="display:none"></section>
     <section id="tab_fuzzer" style="display:none"></section>
     <section id="tab_buckets" style="display:none"></section>
+    <section id="tab_errors" style="display:none"></section>
   `;
   root.appendChild(panel);
 
@@ -544,17 +553,35 @@ if (typeof window !== 'undefined') (function () {
   };
   const tabsEl = panel.querySelector('#tabs');
   const runtimeTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="runtime"]');
+  const errorsTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
     if (runtimeTabBtn) runtimeTabBtn.textContent = `Runtime Secrets (${runtimeLogs.length})`;
   };
+  function updateErrorBadge(){
+    if (errorsTabBtn) errorsTabBtn.textContent = `Errors (${errorLog.length})`;
+  }
   updateRuntimeBadge();
+  updateErrorBadge();
   function showTab(name){
-    ['files','js','runtime','crawler','versions','fuzzer','buckets'].forEach(t=>{
+    ['files','js','runtime','crawler','versions','fuzzer','buckets','errors'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
       const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
     });
   }
+  const tabErrors = panel.querySelector('#tab_errors');
+  renderErrors = function(){
+    if (!tabErrors) return;
+    tabErrors.innerHTML = errorLog.length ? '' : '<div class="ptk-row">No errors</div>';
+    errorLog.forEach(err => {
+      const div = document.createElement('div');
+      div.className = 'ptk-row';
+      div.textContent = `${err.time} - ${err.message}`;
+      tabErrors.appendChild(div);
+    });
+    updateErrorBadge();
+  };
+  renderErrors();
   runtimeNotify = function(){
     showTab('runtime');
     if (!runtimeAlerted){

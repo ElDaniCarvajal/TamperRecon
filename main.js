@@ -2693,6 +2693,178 @@ rsRefs.pmToggle.onclick=()=>{
   global.TRRecon = { discoverSourceMap, mineParams, detectSPARoutes, virtualCrawl };
 })(typeof window !== 'undefined' ? window : globalThis);
 
+/* ============================
+   RUNTIME MONITORING ADD-ONS
+============================ */
+(function(global){
+  'use strict';
+
+  const activity = [];
+  function logActivity(type, detail){
+    const entry = { type, detail, time: Date.now() };
+    activity.push(entry);
+    try{ console.log('[TR]', type, detail); }catch(_e){}
+  }
+
+  // fetch
+  if (global.fetch){
+    const origFetch = global.fetch;
+    global.fetch = async function(...args){
+      logActivity('fetch', String(args[0]));
+      try{
+        const res = await origFetch.apply(this, args);
+        logActivity('fetch-response', res.url || '');
+        return res;
+      }catch(e){
+        logActivity('fetch-error', e && e.message || '');
+        throw e;
+      }
+    };
+  }
+
+  // XMLHttpRequest
+  if (global.XMLHttpRequest){
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest){
+      this.__tr_url = url; this.__tr_method = method;
+      logActivity('xhr-open', method + ' ' + url);
+      return origOpen.call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function(body){
+      logActivity('xhr-send', this.__tr_url || '');
+      return origSend.call(this, body);
+    };
+  }
+
+  // WebSocket
+  if (global.WebSocket){
+    const OrigWebSocket = global.WebSocket;
+    global.WebSocket = function(url, protocols){
+      logActivity('websocket', url);
+      const ws = new OrigWebSocket(url, protocols);
+      ws.addEventListener('message', ev=>logActivity('ws-message', ev.data));
+      return ws;
+    };
+  }
+
+  // EventSource
+  if (global.EventSource){
+    const OrigEventSource = global.EventSource;
+    global.EventSource = function(url, opts){
+      logActivity('eventsource', url);
+      const es = new OrigEventSource(url, opts);
+      es.addEventListener('message', ev=>logActivity('es-message', ev.data));
+      return es;
+    };
+  }
+
+  // postMessage
+  if (global.postMessage){
+    const origPostMessage = global.postMessage;
+    global.postMessage = function(msg, target, transfer){
+      try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
+      return origPostMessage.call(this, msg, target, transfer);
+    };
+  }
+
+  // BroadcastChannel
+  if (global.BroadcastChannel){
+    const OrigBC = global.BroadcastChannel;
+    global.BroadcastChannel = function(name){
+      logActivity('broadcastchannel', name);
+      const bc = new OrigBC(name);
+      const origBCPost = bc.postMessage;
+      bc.postMessage = function(msg){
+        try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
+        return origBCPost.call(bc, msg);
+      };
+      bc.addEventListener('message', ev=>{ try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); } });
+      return bc;
+    };
+  }
+
+  // Service Workers
+  if (global.navigator && global.navigator.serviceWorker){
+    global.navigator.serviceWorker.getRegistrations().then(regs=>{
+      regs.forEach(reg=>logActivity('serviceWorker', reg.active && reg.active.scriptURL || ''));
+    }).catch(e=>logActivity('sw-error', e && e.message || ''));
+  }
+
+  // atob
+  if (global.atob){
+    const origAtob = global.atob;
+    global.atob = function(str){
+      logActivity('atob', str);
+      return origAtob.call(this, str);
+    };
+  }
+
+  // TextDecoder
+  if (global.TextDecoder){
+    const OrigTD = global.TextDecoder;
+    global.TextDecoder = function(...args){
+      const td = new OrigTD(...args);
+      const origDecode = td.decode;
+      td.decode = function(...dargs){
+        const res = origDecode.apply(td, dargs);
+        logActivity('textdecoder', res);
+        return res;
+      };
+      return td;
+    };
+  }
+
+  // crypto.subtle.exportKey
+  if (global.crypto && global.crypto.subtle && global.crypto.subtle.exportKey){
+    const origExportKey = global.crypto.subtle.exportKey.bind(global.crypto.subtle);
+    global.crypto.subtle.exportKey = async function(format, key){
+      const res = await origExportKey(format, key);
+      logActivity('exportKey', format);
+      return res;
+    };
+  }
+
+  // storage & JWT
+  function analyzeJWT(token){
+    try{
+      const parts = token.split('.');
+      if (parts.length >= 2){
+        const h = JSON.parse(global.atob(parts[0]));
+        const p = JSON.parse(global.atob(parts[1]));
+        logActivity('jwt', JSON.stringify({ header:h, payload:p }));
+      }
+    }catch(e){ logActivity('jwt-error', e && e.message || ''); }
+  }
+  function inspectStore(storeName){
+    try{
+      const s = global[storeName];
+      if (!s) return;
+      for(let i=0;i<s.length;i++){
+        const k = s.key(i); const v = s.getItem(k);
+        if(/token|key|secret|email/i.test(v||'')) logActivity(storeName, k + '=' + v);
+        if(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(v||'')) analyzeJWT(v);
+      }
+    }catch(e){ logActivity('storage-error', e && e.message || ''); }
+  }
+  inspectStore('localStorage');
+  inspectStore('sessionStorage');
+
+  // simple open redirect fuzzer
+  function openRedirectFuzzer(url){
+    try{
+      const params = ['next','url','redirect','returnTo'];
+      const u = new URL(url || global.location.href, global.location.href);
+      params.forEach(p=>{
+        if(u.searchParams.has(p)) logActivity('open-redirect', p + '=' + u.searchParams.get(p));
+      });
+    }catch(e){ logActivity('open-redirect-error', e && e.message || ''); }
+  }
+  openRedirectFuzzer();
+
+  global.TRMonitor = { logActivity, activity, openRedirectFuzzer };
+})(typeof window !== 'undefined' ? window : globalThis);
+
 if (typeof module !== 'undefined' && module.exports){
-  module.exports = { TRCore: globalThis.TRCore, TRRecon: globalThis.TRRecon };
+  module.exports = { TRCore: globalThis.TRCore, TRRecon: globalThis.TRRecon, TRMonitor: globalThis.TRMonitor };
 }

@@ -317,7 +317,7 @@ if (typeof window !== 'undefined') (function () {
   function logError(e){
     const msg = e && e.message ? e.message : String(e);
     errorLog.push({ time: new Date().toISOString(), message: msg });
-    console.error('TamperRecon error:', e);
+    try { addConsoleLog('error', ['TamperRecon error:', e]); } catch(_e) {}
     try { renderErrors(); } catch(_e) {}
   }
   const sameOrigin = url => { try { return new URL(url, location.origin).origin === location.origin; } catch(e){ logError(e); return false; } };
@@ -625,7 +625,7 @@ if (typeof window !== 'undefined') (function () {
     showTab('runtime');
     if (!runtimeAlerted){
       runtimeAlerted = true;
-      try{ console.log('Runtime secret found'); }catch(e){ logError(e); }
+      try{ addConsoleLog('log', ['Runtime secret found']); }catch(e){ logError(e); }
     }
   };
   tabsEl.addEventListener('click', (e)=>{
@@ -2428,10 +2428,10 @@ rsRefs.pmToggle.onclick=()=>{
 
   if (typeof window !== 'undefined'){
     window.addEventListener('error', e => {
-      console.error('TamperRecon error:', e.error || e.message);
+      logError(e.error || e.message);
     });
     window.addEventListener('unhandledrejection', e => {
-      console.error('TamperRecon unhandled rejection:', e.reason);
+      logError(e.reason);
     });
   }
 
@@ -2528,7 +2528,7 @@ rsRefs.pmToggle.onclick=()=>{
           response:{ status:this.status, headers:parseHeaders(this.getAllResponseHeaders()), body:this.responseText, size:(this.responseText||'').length },
           time:end-start
         });
-      }catch(e){ console.error(e); }
+      }catch(e){ logError(e); }
     });
     return origXHRSend.apply(this, arguments);
   };
@@ -2608,7 +2608,7 @@ rsRefs.pmToggle.onclick=()=>{
       const str = typeof data === 'string' ? data : JSON.stringify(data);
       const matches = dangerPatterns.filter(rx=>rx.test(str)).map(rx=>rx.source);
       push(Object.assign({ type, data:str, matches }, extra||{}));
-    }catch(e){ console.error(e); }
+    }catch(e){ logError(e); }
   }
 
   async function scanServiceWorkers(){
@@ -2624,7 +2624,7 @@ rsRefs.pmToggle.onclick=()=>{
         const hasCachePut = /cache\.put|caches\.open/gi.test(text);
         push({ type:'serviceWorker', url, hasCachePut, size:text.length });
       }
-    }catch(e){ console.error(e); }
+    }catch(e){ logError(e); }
   }
   scanServiceWorkers();
 
@@ -2740,7 +2740,7 @@ rsRefs.pmToggle.onclick=()=>{
   function logActivity(type, detail){
     const entry = { type, detail, time: Date.now() };
     activity.push(entry);
-    try{ console.log('[TR]', type, detail); }catch(_e){}
+    try{ addConsoleLog('log', ['[TR]', type, detail]); }catch(_e){}
   }
 
   // fetch

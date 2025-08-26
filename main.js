@@ -1,3 +1,19 @@
+const consoleLogs = [];
+let renderConsole = () => {};
+function addConsoleLog(level, args){
+  const msg = args.map(a => {
+    try { return typeof a === 'string' ? a : JSON.stringify(a); }
+    catch(_e){ return String(a); }
+  }).join(' ');
+  consoleLogs.push({ time: new Date().toISOString(), level, message: msg });
+  try { renderConsole(); } catch(_e){}
+}
+(function(){
+  ['log','error','warn'].forEach(level=>{
+    globalThis.console[level] = (...args)=>addConsoleLog(level, args);
+  });
+})();
+
 function scanChunksAndTs(files){
   const findings = [];
   const secretPatterns = [
@@ -505,6 +521,7 @@ if (typeof window !== 'undefined') (function () {
         <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
         <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
         <div class="ptk-tab" data-tab="hard">Hardening</div>
+        <div class="ptk-tab" data-tab="console">Console</div>
         <div class="ptk-tab" data-tab="errors">Errors</div>
       </div>
       <section id="tab_files"></section>
@@ -515,6 +532,7 @@ if (typeof window !== 'undefined') (function () {
       <section id="tab_fuzzer" style="display:none"></section>
       <section id="tab_buckets" style="display:none"></section>
       <section id="tab_hard" style="display:none"></section>
+      <section id="tab_console" style="display:none"></section>
       <section id="tab_errors" style="display:none"></section>
       `;
   root.appendChild(panel);
@@ -555,22 +573,41 @@ if (typeof window !== 'undefined') (function () {
   };
   const tabsEl = panel.querySelector('#tabs');
   const runtimeTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="runtime"]');
+  const consoleTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
     if (runtimeTabBtn) runtimeTabBtn.textContent = `Runtime Secrets (${runtimeLogs.length})`;
   };
+  function updateConsoleBadge(){
+    if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
+  }
   function updateErrorBadge(){
     if (errorsTabBtn) errorsTabBtn.textContent = `Errors (${errorLog.length})`;
   }
   updateRuntimeBadge();
+  updateConsoleBadge();
   updateErrorBadge();
   function showTab(name){
-      ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','errors'].forEach(t=>{
+      ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','console','errors'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
       const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
     });
   }
+  const tabConsole = panel.querySelector('#tab_console');
+  renderConsole = function(){
+    if (!tabConsole) return;
+    tabConsole.innerHTML = consoleLogs.length ? '' : '<div class="ptk-row">No logs</div>';
+    consoleLogs.forEach(log => {
+      const div = document.createElement('div');
+      div.className = 'ptk-row';
+      div.textContent = `${log.time} [${log.level}] ${log.message}`;
+      tabConsole.appendChild(div);
+    });
+    updateConsoleBadge();
+  };
+  renderConsole();
+
   const tabErrors = panel.querySelector('#tab_errors');
   renderErrors = function(){
     if (!tabErrors) return;

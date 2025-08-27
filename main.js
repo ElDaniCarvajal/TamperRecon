@@ -622,7 +622,7 @@ if (typeof window !== 'undefined') (function () {
         <section id="tab_apis_openapi"></section>
         <section id="tab_apis_graphql" style="display:none"></section>
         <section id="tab_apis_cors" style="display:none"></section>
-        <section id="tab_apis_ratelimit" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_ratelimit" style="display:none"></section>
         <section id="tab_apis_fuzzer" style="display:none"></section>
       </div>
       <div id="top_security" style="display:none">
@@ -2472,6 +2472,69 @@ rsRefs.pmToggle.onclick=()=>{
   function coClear(){ co.queue=[]; co.findings.length=0; co.idx=0; co.inFlight=0; coRefs.results.innerHTML=''; coRefs.status.textContent='En espera…'; coUpdateCount(); coPersist(); }
   coRefs.run.onclick=coStart; coRefs.clear.onclick=coClear;
   coRefs.csv.onclick=()=>{ const head=['url','method','origin','status','acao','acac','vary','acah','acam','risk']; csvDownload(`cors_${nowStr()}.csv`, head, co.findings); };
+
+  /* ============================
+     Rate-Limit Probe
+  ============================ */
+  const tabRL = panel.querySelector('#tab_apis_ratelimit');
+  const rlTabBtn = panel.querySelector('#tabs_apis .ptk-tab[data-tab="ratelimit"]');
+  tabRL.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">Rate-Limit Probe</div>
+        <div class="ptk-grid">
+          <button id="rl_start" class="ptk-btn">Start</button>
+          <button id="rl_stop" class="ptk-btn">Stop</button>
+          <button id="rl_clear" class="ptk-btn">Clear</button>
+          <button id="rl_csv" class="ptk-btn">CSV</button>
+          <label>QPS <input type="number" id="rl_qps" value="2" min="1" style="width:60px"></label>
+          <label>Dur (s) <input type="number" id="rl_dur" value="5" min="1" style="width:60px"></label>
+          <label>Método <select id="rl_method"><option value="HEAD">HEAD</option><option value="GET">GET</option></select></label>
+          <label><input type="checkbox" id="rl_safe" checked> Safe Mode</label>
+        </div>
+      </div>
+      <div class="ptk-row"><label>Endpoints<br><textarea id="rl_targets" rows="3" style="width:100%"></textarea></label></div>
+      <div id="rl_status" style="margin:6px 0">En espera…</div>
+      <div id="rl_results"></div>
+    </div>
+  `;
+  const rlRefs = {
+    start: tabRL.querySelector('#rl_start'),
+    stop: tabRL.querySelector('#rl_stop'),
+    clear: tabRL.querySelector('#rl_clear'),
+    csv: tabRL.querySelector('#rl_csv'),
+    qps: tabRL.querySelector('#rl_qps'),
+    dur: tabRL.querySelector('#rl_dur'),
+    method: tabRL.querySelector('#rl_method'),
+    safe: tabRL.querySelector('#rl_safe'),
+    targets: tabRL.querySelector('#rl_targets'),
+    status: tabRL.querySelector('#rl_status'),
+    results: tabRL.querySelector('#rl_results')
+  };
+  const rl = { findings:[], running:false, stop:false };
+  try{ if(typeof GM_getValue==='function') rlRefs.targets.value=GM_getValue(`${site}_rl_targets`,''); }catch(_e){}
+  rlRefs.targets.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_rl_targets`, rlRefs.targets.value); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') rlRefs.qps.value=GM_getValue(`${site}_rl_qps`,2); }catch(_e){}
+  rlRefs.qps.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_rl_qps`, Number(rlRefs.qps.value)||1); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') rlRefs.dur.value=GM_getValue(`${site}_rl_dur`,5); }catch(_e){}
+  rlRefs.dur.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_rl_dur`, Number(rlRefs.dur.value)||1); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') rlRefs.method.value=GM_getValue(`${site}_rl_method`,'HEAD'); }catch(_e){}
+  rlRefs.method.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_rl_method`, rlRefs.method.value); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') rlRefs.safe.checked=GM_getValue(`${site}_rl_safe`, true); }catch(_e){}
+  rlRefs.safe.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_rl_safe`, rlRefs.safe.checked); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') rl.findings=JSON.parse(GM_getValue(`${site}_ratelimit`, '[]'))||[]; }catch(_e){}
+  rl.findings.forEach(f=>rlRender(f));
+  rlUpdateCount();
+  function rlUpdateCount(){ if(rlTabBtn) rlTabBtn.textContent=`Rate-Limit Probe (${rl.findings.length})`; }
+  function rlPersist(){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_ratelimit`, JSON.stringify(rl.findings)); }catch(_e){} }
+  function rlRender(f){ const fam=family(f.first429?429:(f.s5xx?500:(f.s4xx?400:200))); const div=document.createElement('div'); div.className='ptk-row'; div.innerHTML=`<div><b>${f.method}</b> <a class="ptk-link" href="${f.url}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${f.url}</a></div><div class="ptk-code" style="color:${famColor(fam)}">2xx=${f.s2xx} 4xx=${f.s4xx} 5xx=${f.s5xx}${f.first429?` · 429#${f.first429}`:''}${f.retryAfter?` · Retry-After:${escHTML(f.retryAfter)}`:''}${f.rateLimit?` · ${escHTML(f.rateLimit)}`:''}</div>`; rlRefs.results.appendChild(div); }
+  function rlTargets(){ return unique(rlRefs.targets.value.split(/\s+/).map(s=>s.trim()).filter(Boolean).map(p=>mkAbs(p)).filter(Boolean).filter(u=>!rlRefs.safe.checked||sameOrigin(u))); }
+  function rlHandle(r,res,idx){ const status=res.status; if(status>=200&&status<300) r.s2xx++; else if(status>=400&&status<500) r.s4xx++; else if(status>=500) r.s5xx++; const hdr=res.responseHeaders||''; if(r.retryAfter===''){ const m=/^retry-after:\s*([^\n]+)/im.exec(hdr); if(m) r.retryAfter=m[1].trim(); } if(r.rateLimit===''){ const rls=[]; hdr.split(/\r?\n/).forEach(h=>{ if(/^x-ratelimit-/i.test(h)) rls.push(h.trim()); }); if(rls.length) r.rateLimit=rls.join('; '); } if(status===429&&r.first429==null) r.first429=idx+1; }
+  async function rlRun(url){ const qps=Math.max(1,Number(rlRefs.qps.value)||1); const dur=Math.max(1,Number(rlRefs.dur.value)||1); const method=rlRefs.method.value; const max=Math.ceil(qps*dur); const delay=1000/qps; const r={url,method,qps,dur,total:0,s2xx:0,s4xx:0,s5xx:0,first429:null,retryAfter:'',rateLimit:''}; for(let i=0;i<max && !rl.stop;i++){ rlRefs.status.textContent=`${method} ${url} ${i+1}/${max}`; await new Promise(res=>{ GM_xmlhttpRequest({method,url,timeout:8000,onload:resp=>{ rlHandle(r,resp,i); res(); },onerror:()=>{res();},ontimeout:()=>{res();}}); }); r.total++; if(i<max-1 && !rl.stop) await new Promise(r2=>setTimeout(r2,delay)); } rl.findings.push(r); rlRender(r); rlPersist(); rlUpdateCount(); }
+  async function rlStart(){ if(rl.running) return; const targets=rlTargets(); if(!targets.length){ rlRefs.status.textContent='Sin endpoints'; return; } rl.running=true; rl.stop=false; rl.findings.length=0; rlRefs.results.innerHTML=''; rlPersist(); rlUpdateCount(); for(const u of targets){ if(rl.stop) break; await rlRun(u); } rl.running=false; rlRefs.status.textContent=rl.stop?'Detenido.':`Finalizado. Endpoints: ${targets.length}`; }
+  function rlStop(){ rl.stop=true; }
+  function rlClear(){ rl.stop=false; rl.running=false; rl.findings.length=0; rlRefs.results.innerHTML=''; rlRefs.status.textContent='En espera…'; rlUpdateCount(); rlPersist(); }
+  rlRefs.start.onclick=rlStart; rlRefs.stop.onclick=rlStop; rlRefs.clear.onclick=rlClear; rlRefs.csv.onclick=()=>{ const head=['url','method','qps','duration','total','2xx','4xx','5xx','first429','retryAfter','rateLimit']; csvDownload(`ratelimit_${nowStr()}.csv`, head, rl.findings); };
 
   /* ============================
      API Fuzzer (sin cambios, CSV con file/line)

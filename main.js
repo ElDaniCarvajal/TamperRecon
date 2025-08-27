@@ -896,6 +896,39 @@ if (typeof window !== 'undefined') (function () {
     }catch(_e){}
   }
 
+  function handleCodecEvent(ev){
+    if(ev.__trLocal) return;
+    const type = (ev.type||'').split(':').slice(1).join(':') || '';
+    if(type==='btoa' && !codecCfg.btoa) return;
+    if((type==='textencode' || type==='textdecode') && !codecCfg.text) return;
+    addCodecLog({
+      ts: ev.ts || Date.now(),
+      codec: type,
+      length: ev.length || 0,
+      isJSON: ev.isJSON || false,
+      isJWT: ev.isJWT || false,
+      inputPreview: ev.inputPreview || '',
+      outputPreview: ev.outputPreview || '',
+      inputFull: ev.inputFull || ev.inputPreview || '',
+      outputFull: ev.outputFull || ev.outputPreview || ''
+    });
+  }
+  let codecSubId = 0;
+  function updateCodecSubscription(){
+    try{
+      if(!globalThis.TREventBus) return;
+      if(liveCodec){
+        if(!codecSubId){
+          if(globalThis.TREventBuffers && globalThis.TREventBuffers.codec) globalThis.TREventBuffers.codec.all().forEach(handleCodecEvent);
+          codecSubId = globalThis.TREventBus.subscribe('codec:*', handleCodecEvent);
+        }
+      } else if(codecSubId){
+        globalThis.TREventBus.unsubscribe(codecSubId);
+        codecSubId = 0;
+      }
+    }catch(_e){}
+  }
+
   function handleCryptoEvent(ev){
     const type = (ev.type||'').split(':').slice(1).join(':') || '';
     addCryptoLog({
@@ -1402,12 +1435,13 @@ if (typeof window !== 'undefined') (function () {
   function persistLive(key, val){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_live_${key}`, val); }catch(_e){} }
   liveRefs.net.onchange = ()=>{ liveNet = liveRefs.net.checked; persistLive('net', liveNet); updateNetSubscription(); updateLiveChips(); };
   liveRefs.msg.onchange = ()=>{ liveMsg = liveRefs.msg.checked; persistLive('msg', liveMsg); updatePmSubscription(); updateLiveChips(); };
-  liveRefs.codec.onchange = ()=>{ liveCodec = liveRefs.codec.checked; persistLive('codec', liveCodec); updateLiveChips(); };
+  liveRefs.codec.onchange = ()=>{ liveCodec = liveRefs.codec.checked; persistLive('codec', liveCodec); updateCodecSubscription(); updateLiveChips(); };
   liveRefs.crypto.onchange = ()=>{ liveCrypto = liveRefs.crypto.checked; persistLive('crypto', liveCrypto); updateCryptoSubscription(); updateLiveChips(); };
   liveRefs.console.onchange = ()=>{ liveConsole = liveRefs.console.checked; persistLive('console', liveConsole); updateLiveChips(); };
   liveRefs.globals.onchange = ()=>{ liveGlobals = liveRefs.globals.checked; persistLive('globals', liveGlobals); updateLiveChips(); };
   updateNetSubscription();
   updatePmSubscription();
+  updateCodecSubscription();
   updateCryptoSubscription();
   updateLiveChips();
   runtimeNotify = function(){
@@ -2307,7 +2341,7 @@ tabCodecs.innerHTML = `
     </div>
     <div style="max-height:200px;overflow:auto">
       <table style="width:100%;border-collapse:collapse">
-        <thead><tr><th>ts</th><th>codec</th><th>len</th><th>JSON</th><th>JWT</th><th>input</th><th>output</th><th>acciones</th></tr></thead>
+        <thead><tr><th>ts</th><th>codec</th><th>length</th><th>isJSON</th><th>isJWT</th><th>inputPreview</th><th>outputPreview</th><th>acciones</th></tr></thead>
         <tbody id="cd_rows"></tbody>
       </table>
     </div>
@@ -4878,7 +4912,7 @@ updateRuntimeBadge();
         const out = origAtob.call(this, str);
         const ts = Date.now();
         addCodecLog({ codec:'atob', input:str, output:out, length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
-        TREventBus.emit({ type:'codec:atob', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts });
+        TREventBus.emit({ type:'codec:atob', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts, __trLocal:true });
         return out;
       };
       wrappedAtob[WRAP_FLAG] = true;
@@ -4895,7 +4929,7 @@ updateRuntimeBadge();
         if (codecCfg.btoa){
           const ts = Date.now();
           addCodecLog({ codec:'btoa', input:str, output:out, length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
-          TREventBus.emit({ type:'codec:btoa', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts });
+          TREventBus.emit({ type:'codec:btoa', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts, __trLocal:true });
         }
         return out;
       };
@@ -4916,7 +4950,7 @@ updateRuntimeBadge();
           if (codecCfg.text){
             const ts = Date.now();
             addCodecLog({ codec:'textdecoder', input:dargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts, inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(dargs[0]), outputFull:ebToString(res) });
-            TREventBus.emit({ type:'codec:textdecode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts });
+            TREventBus.emit({ type:'codec:textdecode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts, __trLocal:true });
           }
           return res;
         };
@@ -4939,7 +4973,7 @@ updateRuntimeBadge();
           if (codecCfg.text){
             const ts = Date.now();
             addCodecLog({ codec:'textencoder', input:eargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts, inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(eargs[0]), outputFull:ebToString(res) });
-            TREventBus.emit({ type:'codec:textencode', inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts });
+            TREventBus.emit({ type:'codec:textencode', inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts, __trLocal:true });
           }
           return res;
         };

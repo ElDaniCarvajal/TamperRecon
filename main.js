@@ -839,6 +839,61 @@ if (typeof window !== 'undefined') (function () {
   const cryptoLogs = [];
   let cryptoRender = ()=>{};
   let cryptoSeq = 0;
+  const globalsList = [];
+  let globalsRender = ()=>{};
+  let globalsSeq = 0;
+  const globalsKnown = new Set();
+  const GLOBALS_TICK_LIMIT = 50;
+  let globalsTimer = 0;
+  let loadGlobalsKnown = ()=>{};
+  let saveGlobalsKnown = ()=>{};
+  function globalsPreview(v){
+    if (v === null) return 'null';
+    const t = typeof v;
+    if (t === 'string') return v.length>80 ? v.slice(0,80)+'…' : v;
+    if (t === 'number' || t === 'boolean' || t === 'bigint') return String(v);
+    if (t === 'function') return (v.name||'fn')+'()';
+    if (t === 'object'){
+      try{ return JSON.stringify(v).slice(0,80); }catch(_e){ return Object.prototype.toString.call(v); }
+    }
+    return String(v);
+  }
+  function detectGlobals(){
+    if(!liveGlobals) return;
+    let cnt = 0;
+    let props;
+    try{ props = Object.getOwnPropertyNames(window); }catch(_e){ props = []; }
+    for(const name of props){
+      if(globalsKnown.has(name)) continue;
+      globalsKnown.add(name);
+      const desc = Object.getOwnPropertyDescriptor(window, name);
+      const rec = { id: ++globalsSeq, name, type:'', preview:'', getter:false };
+      if(desc && typeof desc.get === 'function'){
+        rec.type = 'getter';
+        rec.preview = '[getter]';
+        rec.getter = true;
+      }else{
+        let val; try{ val = window[name]; }catch(_e){}
+        rec.type = typeof val;
+        rec.preview = globalsPreview(val);
+      }
+      globalsList.push(rec);
+      cnt++;
+      if(cnt>=GLOBALS_TICK_LIMIT) break;
+    }
+    if(cnt>0){
+      try{ globalsRender(); }catch(_e){}
+      updateRuntimeBadge();
+      saveGlobalsKnown();
+    }
+  }
+  function updateGlobalsLoop(){
+    if(globalsTimer){ clearInterval(globalsTimer); globalsTimer=0; }
+    if(liveGlobals){ globalsTimer = setInterval(detectGlobals, 1000); }
+  }
+  function initGlobalsBaseline(){
+    try{ Object.getOwnPropertyNames(window).forEach(k=>globalsKnown.add(k)); }catch(_e){}
+  }
   function addCodecLog(rec){
     if(!liveCodec) return;
     if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
@@ -1296,6 +1351,11 @@ if (typeof window !== 'undefined') (function () {
       codecCfg.text = GM_getValue(`${site}_codec_text`, false);
     }
   }catch(_e){}
+  loadGlobalsKnown = ()=>{ try{ if(typeof GM_getValue==='function'){ const j=GM_getValue(`${site}_globals_known`,'[]'); JSON.parse(j).forEach(k=>globalsKnown.add(k)); } }catch(_e){} };
+  saveGlobalsKnown = ()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_globals_known`, JSON.stringify([...globalsKnown])); }catch(_e){} };
+  loadGlobalsKnown();
+  initGlobalsBaseline();
+  saveGlobalsKnown();
   const topTabsEl = panel.querySelector('#top_tabs');
   function showTopTab(name){
     ['discover','apis','security','runtime','report'].forEach(t=>{
@@ -1368,6 +1428,7 @@ if (typeof window !== 'undefined') (function () {
     if (runtimeCodecLabel) runtimeCodecLabel.textContent = `Codecs (${codecLogs.length})`;
     if (runtimeCryptoLabel) runtimeCryptoLabel.textContent = `Crypto (${cryptoLogs.length})`;
     if (runtimeConsoleLabel) runtimeConsoleLabel.textContent = `Console & Errors (${consoleLogs.length})`;
+    if (runtimeGlobalsLabel) runtimeGlobalsLabel.textContent = `Globals/Vars (${globalsList.length})`;
   };
   function updateLiveChips(){
     if(runtimeNetChip) runtimeNetChip.textContent = liveNet ? 'LIVE' : 'OFF';
@@ -1447,12 +1508,13 @@ if (typeof window !== 'undefined') (function () {
   liveRefs.codec.onchange = ()=>{ liveCodec = liveRefs.codec.checked; persistLive('codec', liveCodec); updateCodecSubscription(); updateLiveChips(); };
   liveRefs.crypto.onchange = ()=>{ liveCrypto = liveRefs.crypto.checked; persistLive('crypto', liveCrypto); updateCryptoSubscription(); updateLiveChips(); };
   liveRefs.console.onchange = ()=>{ liveConsole = liveRefs.console.checked; persistLive('console', liveConsole); updateLiveChips(); };
-  liveRefs.globals.onchange = ()=>{ liveGlobals = liveRefs.globals.checked; persistLive('globals', liveGlobals); updateLiveChips(); };
+  liveRefs.globals.onchange = ()=>{ liveGlobals = liveRefs.globals.checked; persistLive('globals', liveGlobals); updateLiveChips(); updateGlobalsLoop(); };
   updateNetSubscription();
   updatePmSubscription();
   updateCodecSubscription();
   updateCryptoSubscription();
   updateLiveChips();
+  updateGlobalsLoop();
   runtimeNotify = function(){
     showTopTab('runtime');
     showRuntimeTab('network');
@@ -2518,21 +2580,66 @@ cyRefs.md.onclick=()=>{ const cols=['ts','type','alg','keyPreview','ivPreview','
 cryptoRender();
 updateRuntimeBadge();
 
-{ // Global variables/functions viewer
-  try {
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
-    const base = new Set(Object.getOwnPropertyNames(iframe.contentWindow));
-    document.body.removeChild(iframe);
-    ['scanChunksAndTs','createGlobalViewer'].forEach(n => base.add(n));
-    const gv = createGlobalViewer(window, base);
-    if (gv) {
-      tabRuntime.appendChild(gv.container);
-      tabRuntime.appendChild(gv.output);
-    }
-  } catch(e){ logError(e); }
-}
+/* ============================
+   Runtime Globals
+============================ */
+const tabGlobals = panel.querySelector('#tab_runtime_globals');
+tabGlobals.innerHTML = `
+  <div class="ptk-box">
+    <div class="ptk-flex">
+      <div class="ptk-hdr">Globals/Vars</div>
+      <div class="ptk-grid">
+        <button id="gl_clear" class="ptk-btn">Clear</button>
+        <button id="gl_json" class="ptk-btn">JSON</button>
+      </div>
+    </div>
+    <div style="max-height:200px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th>name</th><th>type</th><th>preview</th><th>acciones</th></tr></thead>
+        <tbody id="gl_rows"></tbody>
+      </table>
+    </div>
+    <div id="gl_det" class="ptk-box" style="display:none"></div>
+  </div>
+`;
+const glRefs = {
+  clear: tabGlobals.querySelector('#gl_clear'),
+  json: tabGlobals.querySelector('#gl_json'),
+  rows: tabGlobals.querySelector('#gl_rows'),
+  det: tabGlobals.querySelector('#gl_det')
+};
+globalsRender = function(){
+  renderChunked(globalsList, glRefs.rows, rec=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${escHTML(rec.name)}</td><td>${escHTML(rec.type)}</td><td>${escHTML(rec.preview)}</td><td></td>`;
+    const actions=tr.lastElementChild;
+    const insp=document.createElement('button'); insp.className='ptk-btn'; insp.textContent='Inspect';
+    insp.onclick=()=>{
+      if(rec.getter){ glRefs.det.innerHTML=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.name)}</div><button id="gl_det_close" class="ptk-btn">Cerrar</button></div><div>[getter]</div>`; glRefs.det.style.display=''; glRefs.det.querySelector('#gl_det_close').onclick=()=>{ glRefs.det.style.display='none'; }; return; }
+      let val; try{ val = window[rec.name]; }catch(_e){}
+      let out; try{ out = JSON.stringify(val,null,2); }catch(_e){ out = String(val); }
+      glRefs.det.innerHTML=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.name)}</div><button id="gl_det_close" class="ptk-btn">Cerrar</button></div><pre class="ptk-code">${escHTML(out)}</pre>`;
+      glRefs.det.style.display='';
+      glRefs.det.querySelector('#gl_det_close').onclick=()=>{ glRefs.det.style.display='none'; };
+    };
+    actions.appendChild(insp);
+    const copy=document.createElement('button'); copy.className='ptk-btn'; copy.textContent='Copy path';
+    copy.onclick=()=>{ clip('window.'+rec.name); copy.textContent='¡Copiado!'; setTimeout(()=>copy.textContent='Copy path',1200); };
+    actions.appendChild(copy);
+    const exp=document.createElement('button'); exp.className='ptk-btn'; exp.textContent='Export JSON';
+    exp.onclick=()=>{
+      if(rec.getter){ exp.textContent='getter'; setTimeout(()=>exp.textContent='Export JSON',1200); return; }
+      try{ const val=window[rec.name]; const out=JSON.stringify(val,null,2); textDownload(rec.name+'.json', out); }
+      catch(_e){ exp.textContent='error'; setTimeout(()=>exp.textContent='Export JSON',1200); }
+    };
+    actions.appendChild(exp);
+    return tr;
+  }, '<tr><td colspan="4">Sin datos</td></tr>');
+};
+glRefs.clear.onclick=()=>{ globalsList.length=0; globalsRender(); updateRuntimeBadge(); };
+glRefs.json.onclick=()=>{ const out=JSON.stringify(globalsList.map(r=>r.name),null,2); clip(out); glRefs.json.textContent='¡Copiado!'; setTimeout(()=>glRefs.json.textContent='JSON',1200); };
+globalsRender();
+updateRuntimeBadge();
 
     // Hook CryptoJS AES encrypt/decrypt
     (function(){

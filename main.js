@@ -2,6 +2,8 @@ const consoleLogs = [];
 const consoleLogKeys = new Set();
 let renderConsole = () => {};
 let renderCE = () => {};
+const WRAP_FLAG = '__TR_WRAPPED__';
+const __trOrig = new WeakMap();
 function addConsoleLog(level, args, extra){
   if(!liveConsole) return;
   const msg = args.map(a => {
@@ -829,27 +831,33 @@ if (typeof window !== 'undefined') (function () {
   }
 
   const origFetch = window.fetch;
-  if (origFetch) window.fetch = function(input, init){
-    if(netPaused) return origFetch.call(this, input, init);
-    const start=performance.now();
-    const ts=Date.now();
-    const url=typeof input==='string'?input:(input&&input.url);
-    const method=(init&&init.method)||(input&&input.method)||'GET';
-    const reqHeaders=headersObj((init&&init.headers)||(input&&input.headers));
-    let reqBody=init&&init.body;
-    if(typeof reqBody==='string') reqBody=truncateBytes(reqBody);
-    return origFetch.call(this,input,init).then(resp=>{
-      const rec={ts,type:'fetch',method,url,host:hostFromUrl(url),status:resp.status,ms:Math.round(performance.now()-start),size:0,reqHeaders,reqBody};
-      try{ rec.resHeaders=headersObj(resp.headers); }catch(_e){}
-      return resp.clone().arrayBuffer().then(buf=>{
-        rec.size=buf.byteLength;
-        try{ rec.resBody=truncateBytes(new TextDecoder().decode(buf)); }catch(_e){}
-        addNetLog(rec); return resp; });
-    }).catch(err=>{ addNetLog({ts,type:'fetch',method,url,host:hostFromUrl(url),status:0,ms:Math.round(performance.now()-start),size:0,reqHeaders,reqBody,error:String(err)}); throw err; });
-  };
+  if (origFetch && !origFetch[WRAP_FLAG]) {
+    const wrappedFetch = function(input, init){
+      if(netPaused) return origFetch.call(this, input, init);
+      const start=performance.now();
+      const ts=Date.now();
+      const url=typeof input==='string'?input:(input&&input.url);
+      const method=(init&&init.method)||(input&&input.method)||'GET';
+      const reqHeaders=headersObj((init&&init.headers)||(input&&input.headers));
+      let reqBody=init&&init.body;
+      if(typeof reqBody==='string') reqBody=truncateBytes(reqBody);
+      return origFetch.call(this,input,init).then(resp=>{
+        const rec={ts,type:'fetch',method,url,host:hostFromUrl(url),status:resp.status,ms:Math.round(performance.now()-start),size:0,reqHeaders,reqBody};
+        try{ rec.resHeaders=headersObj(resp.headers); }catch(_e){}
+        return resp.clone().arrayBuffer().then(buf=>{
+          rec.size=buf.byteLength;
+          try{ rec.resBody=truncateBytes(new TextDecoder().decode(buf)); }catch(_e){}
+          addNetLog(rec); return resp; });
+      }).catch(err=>{ addNetLog({ts,type:'fetch',method,url,host:hostFromUrl(url),status:0,ms:Math.round(performance.now()-start),size:0,reqHeaders,reqBody,error:String(err)}); throw err; });
+    };
+    wrappedFetch[WRAP_FLAG] = true;
+    __trOrig.set(wrappedFetch, origFetch);
+    window.fetch = wrappedFetch;
+  }
 
   const OrigXHR = window.XMLHttpRequest;
-  window.XMLHttpRequest = function(){
+  if (typeof OrigXHR === 'function' && !OrigXHR[WRAP_FLAG]) {
+    const WrappedXHR = function(){
     const xhr = new OrigXHR();
     let url='', method='GET', start=0, ts=0; const reqHeaders={}; let reqBody;
     const finalize=()=>{
@@ -865,28 +873,42 @@ if (typeof window !== 'undefined') (function () {
     const origSetRequestHeader=xhr.setRequestHeader; xhr.setRequestHeader=function(k,v){ reqHeaders[k]=v; return origSetRequestHeader.call(xhr,k,v); };
     return xhr;
   };
+    WrappedXHR[WRAP_FLAG] = true;
+    __trOrig.set(WrappedXHR, OrigXHR);
+    window.XMLHttpRequest = WrappedXHR;
+  }
 
   const OrigWS = window.WebSocket;
-  window.WebSocket = new Proxy(OrigWS, {
-    construct(target, args){
-      const ws = new target(...args);
-      const url = args[0];
-      const host = hostFromUrl(url);
-      ws.addEventListener('message', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'recv',url,host,status:0,ms:0,size:(ev.data&&ev.data.length)||0,resBody:truncateBytes(String(ev.data))}); });
-      ws.addEventListener('close', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'close',url,host,status:ev.code,ms:0,size:0}); });
-      const s = ws.send; ws.send=function(data){ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'send',url,host,status:0,ms:0,size:(data&&data.length)||0,reqBody:truncateBytes(String(data))}); return s.call(ws,data); };
-      return ws;
-    }
-  });
+  if (typeof OrigWS === 'function' && !OrigWS[WRAP_FLAG]) {
+    const WrappedWS = new Proxy(OrigWS, {
+      construct(target, args){
+        const ws = new target(...args);
+        const url = args[0];
+        const host = hostFromUrl(url);
+        ws.addEventListener('message', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'recv',url,host,status:0,ms:0,size:(ev.data&&ev.data.length)||0,resBody:truncateBytes(String(ev.data))}); });
+        ws.addEventListener('close', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'close',url,host,status:ev.code,ms:0,size:0}); });
+        const s = ws.send; ws.send=function(data){ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'send',url,host,status:0,ms:0,size:(data&&data.length)||0,reqBody:truncateBytes(String(data))}); return s.call(ws,data); };
+        return ws;
+      }
+    });
+    WrappedWS[WRAP_FLAG] = true;
+    __trOrig.set(WrappedWS, OrigWS);
+    window.WebSocket = WrappedWS;
+  }
 
   const OrigES = window.EventSource;
-  window.EventSource = function(url, cfg){
-    const es = new OrigES(url, cfg);
-    const host = hostFromUrl(url);
-    es.addEventListener('message', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'sse',method:ev.type||'message',url,host,status:0,ms:0,size:(ev.data&&ev.data.length)||0,resBody:truncateBytes(String(ev.data))}); });
-    es.addEventListener('error', ()=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'sse',method:'error',url,host,status:0,ms:0,size:0}); });
-    return es;
-  };
+  if (typeof OrigES === 'function' && !OrigES[WRAP_FLAG]) {
+    const WrappedES = function(url, cfg){
+      const es = new OrigES(url, cfg);
+      const host = hostFromUrl(url);
+      es.addEventListener('message', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'sse',method:ev.type||'message',url,host,status:0,ms:0,size:(ev.data&&ev.data.length)||0,resBody:truncateBytes(String(ev.data))}); });
+      es.addEventListener('error', ()=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'sse',method:'error',url,host,status:0,ms:0,size:0}); });
+      return es;
+    };
+    WrappedES[WRAP_FLAG] = true;
+    __trOrig.set(WrappedES, OrigES);
+    window.EventSource = WrappedES;
+  }
   const origEval = window.eval;
   window.eval = function(str){
     if (typeof str === 'string') addRuntimeLog({ type:'eval', code:str });
@@ -1788,13 +1810,14 @@ function jsProcessCapture(src, headers, body){
   if (body) jsScanCaptured(src+' [body]', body);
   jsRender();
 }
-const _origFetch = window.fetch;
-window.fetch = async function(...args){
-  const res = await _origFetch.apply(this,args);
-  if (jsRefs.captureNet && jsRefs.captureNet.checked){
-    try {
-      const url = typeof args[0]==='string'? args[0] : (args[0] && args[0].url) || '';
-      if(liveNet) logEvent('network', { method:'fetch', url });
+  const _origFetch = window.fetch;
+  if (_origFetch && !_origFetch[WRAP_FLAG]){
+  window.fetch = async function(...args){
+    const res = await _origFetch.apply(this,args);
+    if (jsRefs.captureNet && jsRefs.captureNet.checked){
+      try {
+        const url = typeof args[0]==='string'? args[0] : (args[0] && args[0].url) || '';
+        if(liveNet) logEvent('network', { method:'fetch', url });
       const clone = res.clone();
       const hdrs = Array.from(clone.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n');
       withTimeout(clone.text(), JS.TIMEOUT_MS)
@@ -1802,23 +1825,30 @@ window.fetch = async function(...args){
         .catch(e=>logError(e));
     } catch(e){ logError(e); }
   }
-  return res;
-};
-const _origSend = XMLHttpRequest.prototype.send;
-XMLHttpRequest.prototype.send = function(...args){
-  this.addEventListener('load', function(){
-    if (jsRefs.captureNet && jsRefs.captureNet.checked){
-      try {
-        const hdrs = this.getAllResponseHeaders();
-        const body = this.responseText || '';
-        const url = this.responseURL || '';
-        if(liveNet) logEvent('network', { method:'xhr', url });
-        jsProcessCapture('xhr '+url,hdrs,body);
-      } catch(e){ logError(e); }
-    }
-  });
-  return _origSend.apply(this,args);
-};
+    return res;
+  };
+  window.fetch[WRAP_FLAG] = true;
+  __trOrig.set(window.fetch, _origFetch);
+  }
+  const _origSend = XMLHttpRequest.prototype.send;
+  if (!XMLHttpRequest.prototype.send[WRAP_FLAG]){
+  XMLHttpRequest.prototype.send = function(...args){
+    this.addEventListener('load', function(){
+      if (jsRefs.captureNet && jsRefs.captureNet.checked){
+        try {
+          const hdrs = this.getAllResponseHeaders();
+          const body = this.responseText || '';
+          const url = this.responseURL || '';
+          if(liveNet) logEvent('network', { method:'xhr', url });
+          jsProcessCapture('xhr '+url,hdrs,body);
+        } catch(e){ logError(e); }
+      }
+    });
+    return _origSend.apply(this,args);
+  };
+  XMLHttpRequest.prototype.send[WRAP_FLAG] = true;
+  __trOrig.set(XMLHttpRequest.prototype.send, _origSend);
+  }
 
 // === jsScanText (dominios solo en strings/comentarios + anti-ruido en minificados externos) ===
 function jsScanText(file, text) {
@@ -2334,85 +2364,97 @@ updateRuntimeBadge();
   } catch(e){ logError(e); }
 }
 
-  // Hook CryptoJS AES encrypt/decrypt
-  (function(){
-    try{
-      const aes = window.CryptoJS && window.CryptoJS.AES;
-      if(!aes) return;
-      const wrap = fnName=>{
-        if(typeof aes[fnName] !== 'function') return;
-        const orig = aes[fnName];
-        aes[fnName] = function(data, key, cfg){
-          try{
-            const keyStr = key && key.toString ? key.toString() : String(key);
-            const ivStr = cfg && cfg.iv && cfg.iv.toString ? cfg.iv.toString() : (cfg && cfg.iv ? String(cfg.iv) : '');
-            const dataStr = data && data.toString ? data.toString() : String(data);
-            addRuntimeLog({ type:'AES.'+fnName, key:keyStr, iv:ivStr, data:dataStr });
-            try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:`crypto:aes.${fnName}`, alg:'AES', keyPreview:redact(ebPreview(keyStr,80)), ivPreview:redact(ebPreview(ivStr,80)), length:dataStr.length||0, sample:redact(ebPreview(dataStr,80)), ts:Date.now() }); }catch(_e){}
-          }catch(e){ logError(e); }
-          return orig.apply(this, arguments);
+    // Hook CryptoJS AES encrypt/decrypt
+    (function(){
+      try{
+        const aes = window.CryptoJS && window.CryptoJS.AES;
+        if(!aes) return;
+        const wrap = fnName=>{
+          if(typeof aes[fnName] !== 'function' || aes[fnName][WRAP_FLAG]) return;
+          const orig = aes[fnName];
+          const wrapped = function(data, key, cfg){
+            try{
+              const keyStr = key && key.toString ? key.toString() : String(key);
+              const ivStr = cfg && cfg.iv && cfg.iv.toString ? cfg.iv.toString() : (cfg && cfg.iv ? String(cfg.iv) : '');
+              const dataStr = data && data.toString ? data.toString() : String(data);
+              addRuntimeLog({ type:'AES.'+fnName, key:keyStr, iv:ivStr, data:dataStr });
+              try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:`crypto:aes.${fnName}`, alg:'AES', keyPreview:redact(ebPreview(keyStr,80)), ivPreview:redact(ebPreview(ivStr,80)), length:dataStr.length||0, sample:redact(ebPreview(dataStr,80)), ts:Date.now() }); }catch(_e){}
+            }catch(e){ logError(e); }
+            return orig.apply(this, arguments);
+          };
+          wrapped[WRAP_FLAG] = true;
+          __trOrig.set(wrapped, orig);
+          aes[fnName] = wrapped;
         };
-      };
-      wrap('encrypt');
-      wrap('decrypt');
-    }catch(e){ logError(e); }
-  })();
+        wrap('encrypt');
+        wrap('decrypt');
+      }catch(e){ logError(e); }
+    })();
 
   // Hook WebSocket send/receive
-  (function(){
-    const OrigWS = window.WebSocket;
-    if (typeof OrigWS === 'function'){
-      window.WebSocket = function(...args){
-        const ws = new OrigWS(...args);
-        try{
-          const url = args[0];
-          addRuntimeLog({ type:'WS.connect', data:String(url||'') });
-          const origSend = ws.send;
-          ws.send = function(data){
-            try{ addRuntimeLog({ type:'WS.send', data:String(data) }); }catch(e){ logError(e); }
-            return origSend.apply(this, arguments);
-          };
-          ws.addEventListener && ws.addEventListener('message', ev=>{
-            try{ addRuntimeLog({ type:'WS.recv', data:String(ev.data) }); }catch(e){ logError(e); }
-          });
-        }catch(e){ logError(e); }
-        return ws;
-      };
-    }
-  })();
+    (function(){
+      const OrigWS = window.WebSocket;
+      if (typeof OrigWS === 'function' && !OrigWS[WRAP_FLAG]){
+        const WrappedWS = function(...args){
+          const ws = new OrigWS(...args);
+          try{
+            const url = args[0];
+            addRuntimeLog({ type:'WS.connect', data:String(url||'') });
+            const origSend = ws.send;
+            ws.send = function(data){
+              try{ addRuntimeLog({ type:'WS.send', data:String(data) }); }catch(e){ logError(e); }
+              return origSend.apply(this, arguments);
+            };
+            ws.addEventListener && ws.addEventListener('message', ev=>{
+              try{ addRuntimeLog({ type:'WS.recv', data:String(ev.data) }); }catch(e){ logError(e); }
+            });
+          }catch(e){ logError(e); }
+          return ws;
+        };
+        WrappedWS[WRAP_FLAG] = true;
+        __trOrig.set(WrappedWS, OrigWS);
+        window.WebSocket = WrappedWS;
+      }
+    })();
 
-  // Hook EventSource messages
-  (function(){
-    const OrigES = window.EventSource;
-    if (typeof OrigES === 'function'){
-      window.EventSource = function(...args){
-        const es = new OrigES(...args);
-        try{
-          const url = args[0];
-          addRuntimeLog({ type:'SSE.connect', data:String(url||'') });
-          es.addEventListener && es.addEventListener('message', ev=>{
-            try{ addRuntimeLog({ type:'SSE.message', data:String(ev.data) }); }catch(e){ logError(e); }
-          });
-        }catch(e){ logError(e); }
-        return es;
-      };
-    }
-  })();
+    // Hook EventSource messages
+    (function(){
+      const OrigES = window.EventSource;
+      if (typeof OrigES === 'function' && !OrigES[WRAP_FLAG]){
+        const WrappedES = function(...args){
+          const es = new OrigES(...args);
+          try{
+            const url = args[0];
+            addRuntimeLog({ type:'SSE.connect', data:String(url||'') });
+            es.addEventListener && es.addEventListener('message', ev=>{
+              try{ addRuntimeLog({ type:'SSE.message', data:String(ev.data) }); }catch(e){ logError(e); }
+            });
+          }catch(e){ logError(e); }
+          return es;
+        };
+        WrappedES[WRAP_FLAG] = true;
+        __trOrig.set(WrappedES, OrigES);
+        window.EventSource = WrappedES;
+      }
+    })();
 
-  // Hook postMessage send/receive
-  (function(){
-    const origPM = window.postMessage;
-    if (typeof origPM === 'function'){
-      const serialize = msg => { try{ return typeof msg === 'string' ? msg : JSON.stringify(msg); }catch(e){ logError(e); return String(msg); } };
-      window.postMessage = function(message, targetOrigin, transfer){
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:serialize(message) }); }catch(e){ logError(e); }
-        return origPM.apply(this, arguments);
-      };
-      window.addEventListener && window.addEventListener('message', ev=>{
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin }); }catch(e){ logError(e); }
-      });
-    }
-  })();
+    // Hook postMessage send/receive
+    (function(){
+      const origPM = window.postMessage;
+      if (typeof origPM === 'function' && !origPM[WRAP_FLAG]){
+        const serialize = msg => { try{ return typeof msg === 'string' ? msg : JSON.stringify(msg); }catch(e){ logError(e); return String(msg); } };
+        const wrappedPM = function(message, targetOrigin, transfer){
+          try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:serialize(message) }); }catch(e){ logError(e); }
+          return origPM.apply(this, arguments);
+        };
+        wrappedPM[WRAP_FLAG] = true;
+        __trOrig.set(wrappedPM, origPM);
+        window.postMessage = wrappedPM;
+        window.addEventListener && window.addEventListener('message', ev=>{
+          try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin }); }catch(e){ logError(e); }
+        });
+      }
+    })();
 
   // Scan globals, Web Storage and cookies for secrets
   (function(){
@@ -4254,60 +4296,75 @@ updateRuntimeBadge();
     return obj;
   }
 
-  const origFetch = global.fetch;
-  if (typeof origFetch === 'function'){
-    global.fetch = async function(input, init){
-      const url = (typeof input === 'string') ? input : (input && input.url) || '';
-      const method = (init && init.method) || (input && input.method) || 'GET';
-      const reqHdrs = headersToObj((init && init.headers) || (input && input.headers));
-      const reqBody = (init && init.body) || '';
-      const start = performance.now();
-      const res = await origFetch.apply(this, arguments);
-      const end = performance.now();
-      const clone = res.clone();
-      const resHdrs = headersToObj(clone.headers);
-      const text = await clone.text().catch(()=> '');
-      push({
-        type:'fetch',
-        url, method,
-        request:{ headers:reqHdrs, body:reqBody },
-        response:{ status:res.status, headers:resHdrs, body:text, size:text.length },
-        time:end-start
-      });
-      return res;
-    };
-  }
-
-  const origXHROpen = XMLHttpRequest.prototype.open;
-  const origXHRSend = XMLHttpRequest.prototype.send;
-  const origXHRSetHdr = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.open = function(method, url){
-    this._tr_method = method;
-    this._tr_url = url;
-    this._tr_headers = {};
-    return origXHROpen.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.setRequestHeader = function(k,v){
-    this._tr_headers[k]=v;
-    return origXHRSetHdr.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function(body){
-    const start = performance.now();
-    this.addEventListener('loadend', ()=>{
-      const end = performance.now();
-      try{
+    const origFetch = global.fetch;
+    if (typeof origFetch === 'function' && !origFetch[WRAP_FLAG]){
+      const wrappedFetch = async function(input, init){
+        const url = (typeof input === 'string') ? input : (input && input.url) || '';
+        const method = (init && init.method) || (input && input.method) || 'GET';
+        const reqHdrs = headersToObj((init && init.headers) || (input && input.headers));
+        const reqBody = (init && init.body) || '';
+        const start = performance.now();
+        const res = await origFetch.apply(this, arguments);
+        const end = performance.now();
+        const clone = res.clone();
+        const resHdrs = headersToObj(clone.headers);
+        const text = await clone.text().catch(()=> '');
         push({
-          type:'xhr',
-          url:this._tr_url,
-          method:this._tr_method,
-          request:{ headers:this._tr_headers, body:body || '' },
-          response:{ status:this.status, headers:parseHeaders(this.getAllResponseHeaders()), body:this.responseText, size:(this.responseText||'').length },
+          type:'fetch',
+          url, method,
+          request:{ headers:reqHdrs, body:reqBody },
+          response:{ status:res.status, headers:resHdrs, body:text, size:text.length },
           time:end-start
         });
-      }catch(e){ logError(e); }
-    });
-    return origXHRSend.apply(this, arguments);
-  };
+        return res;
+      };
+      wrappedFetch[WRAP_FLAG] = true;
+      __trOrig.set(wrappedFetch, origFetch);
+      global.fetch = wrappedFetch;
+    }
+
+    const origXHROpen = XMLHttpRequest.prototype.open;
+    const origXHRSend = XMLHttpRequest.prototype.send;
+    const origXHRSetHdr = XMLHttpRequest.prototype.setRequestHeader;
+    if (!XMLHttpRequest.prototype.open[WRAP_FLAG]){
+      XMLHttpRequest.prototype.open = function(method, url){
+        this._tr_method = method;
+        this._tr_url = url;
+        this._tr_headers = {};
+        return origXHROpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.open[WRAP_FLAG] = true;
+      __trOrig.set(XMLHttpRequest.prototype.open, origXHROpen);
+    }
+    if (!XMLHttpRequest.prototype.setRequestHeader[WRAP_FLAG]){
+      XMLHttpRequest.prototype.setRequestHeader = function(k,v){
+        this._tr_headers[k]=v;
+        return origXHRSetHdr.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.setRequestHeader[WRAP_FLAG] = true;
+      __trOrig.set(XMLHttpRequest.prototype.setRequestHeader, origXHRSetHdr);
+    }
+    if (!XMLHttpRequest.prototype.send[WRAP_FLAG]){
+      XMLHttpRequest.prototype.send = function(body){
+        const start = performance.now();
+        this.addEventListener('loadend', ()=>{
+          const end = performance.now();
+          try{
+            push({
+              type:'xhr',
+              url:this._tr_url,
+              method:this._tr_method,
+              request:{ headers:this._tr_headers, body:body || '' },
+              response:{ status:this.status, headers:parseHeaders(this.getAllResponseHeaders()), body:this.responseText, size:(this.responseText||'').length },
+              time:end-start
+            });
+          }catch(e){ logError(e); }
+        });
+        return origXHRSend.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send[WRAP_FLAG] = true;
+      __trOrig.set(XMLHttpRequest.prototype.send, origXHRSend);
+    }
   function parseHeaders(str){
     const out={};
     (str||'').trim().split(/\r?\n/).forEach(line=>{
@@ -4317,49 +4374,58 @@ updateRuntimeBadge();
     return out;
   }
 
-  const OrigWS = global.WebSocket;
-  if (typeof OrigWS === 'function'){
-    global.WebSocket = function(...args){
-      const ws = new OrigWS(...args);
-      const url = args[0];
-      push({ type:'ws.connect', url });
-      const origSend = ws.send;
-      ws.send = function(data){
-        push({ type:'ws.send', url, data:String(data) });
-        return origSend.apply(this, arguments);
+    const OrigWS = global.WebSocket;
+    if (typeof OrigWS === 'function' && !OrigWS[WRAP_FLAG]){
+      const WrappedWS = function(...args){
+        const ws = new OrigWS(...args);
+        const url = args[0];
+        push({ type:'ws.connect', url });
+        const origSend = ws.send;
+        ws.send = function(data){
+          push({ type:'ws.send', url, data:String(data) });
+          return origSend.apply(this, arguments);
+        };
+        ws.addEventListener('message', ev=>{
+          push({ type:'ws.recv', url, data:String(ev.data) });
+        });
+        return ws;
       };
-      ws.addEventListener('message', ev=>{
-        push({ type:'ws.recv', url, data:String(ev.data) });
-      });
-      return ws;
-    };
-  }
-
-  const OrigES = global.EventSource;
-  if (typeof OrigES === 'function'){
-    global.EventSource = function(...args){
-      const es = new OrigES(...args);
-      const url = args[0];
-      push({ type:'es.connect', url });
-      es.addEventListener('message', ev=>{
-        push({ type:'es.message', url, data:String(ev.data) });
-      });
-      return es;
-    };
-  }
-
-  (function(){
-    const origPM = global.postMessage;
-    if (typeof origPM === 'function'){
-      global.postMessage = function(msg, targetOrigin, transfer){
-        detect('postMessage.send', msg, { target: targetOrigin });
-        return origPM.apply(this, arguments);
-      };
-      global.addEventListener('message', ev=>{
-        detect('postMessage.receive', ev.data, { origin: ev.origin });
-      });
+      WrappedWS[WRAP_FLAG] = true;
+      __trOrig.set(WrappedWS, OrigWS);
+      global.WebSocket = WrappedWS;
     }
-  })();
+
+    const OrigES = global.EventSource;
+    if (typeof OrigES === 'function' && !OrigES[WRAP_FLAG]){
+      const WrappedES = function(...args){
+        const es = new OrigES(...args);
+        const url = args[0];
+        push({ type:'es.connect', url });
+        es.addEventListener('message', ev=>{
+          push({ type:'es.message', url, data:String(ev.data) });
+        });
+        return es;
+      };
+      WrappedES[WRAP_FLAG] = true;
+      __trOrig.set(WrappedES, OrigES);
+      global.EventSource = WrappedES;
+    }
+
+    (function(){
+      const origPM = global.postMessage;
+      if (typeof origPM === 'function' && !origPM[WRAP_FLAG]){
+        const wrappedPM = function(msg, targetOrigin, transfer){
+          detect('postMessage.send', msg, { target: targetOrigin });
+          return origPM.apply(this, arguments);
+        };
+        wrappedPM[WRAP_FLAG] = true;
+        __trOrig.set(wrappedPM, origPM);
+        global.postMessage = wrappedPM;
+        global.addEventListener('message', ev=>{
+          detect('postMessage.receive', ev.data, { origin: ev.origin });
+        });
+      }
+    })();
 
   (function(){
     const OrigBC = global.BroadcastChannel;
@@ -4519,135 +4585,158 @@ updateRuntimeBadge();
     try{ addConsoleLog('log', ['[TR]', type, detail]); }catch(_e){}
   }
 
-  // fetch
-  if (global.fetch){
-    const origFetch = global.fetch;
-    global.fetch = async function(...args){
-      const input = args[0]; const init = args[1] || {};
-      const method = (init && init.method) || (input && input.method) || 'GET';
-      const url = typeof input === 'string' ? input : (input && input.url) || '';
-      const start = Date.now();
-      const reqHeaders = ebHeadersToObj(init.headers || (input && input.headers));
-      const reqBody = init && init.body;
-      TREventBus.emit({ type:'net:fetch', phase:'start', method, url, status:0, ok:false, ms:0, reqHeaders, resHeaders:{}, reqBody:ebPreview(reqBody), resBody:'', ts:start });
-      logActivity('fetch', String(args[0]));
-      try{
-        const res = await origFetch.apply(this, args);
-        let resHeaders = {};
-        try{ res.headers.forEach((v,k)=>resHeaders[k]=v); }catch(_e){}
-        let resBody = '';
-        try{ resBody = await res.clone().text(); }catch(_e){}
-        const ms = Date.now() - start;
-        TREventBus.emit({ type:'net:fetch', phase:'end', method, url, status:res.status, ok:res.ok, ms, reqHeaders, resHeaders, reqBody:ebPreview(reqBody), resBody:ebPreview(resBody), ts:Date.now() });
-        logActivity('fetch-response', res.url || '');
-        return res;
-      }catch(e){
-        const ms = Date.now() - start;
-        TREventBus.emit({ type:'net:fetch', phase:'error', method, url, status:0, ok:false, ms, reqHeaders, resHeaders:{}, reqBody:ebPreview(reqBody), resBody:String(e), ts:Date.now() });
-        logActivity('fetch-error', e && e.message || '');
-        throw e;
-      }
-    };
-  }
-
-  // XMLHttpRequest
-  if (global.XMLHttpRequest){
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest){
-      this.__tr_url = url; this.__tr_method = method; this.__tr_start = Date.now();
-      TREventBus.emit({ type:'net:xhr', phase:'start', method, url, status:0, ok:false, ms:0, reqHeaders:{}, resHeaders:{}, reqBody:'', resBody:'', ts:this.__tr_start });
-      logActivity('xhr-open', method + ' ' + url);
-      return origOpen.call(this, method, url, ...rest);
-    };
-    XMLHttpRequest.prototype.send = function(body){
-      this.__tr_body = body;
-      const xhr = this;
-      xhr.addEventListener('loadend', function(){
-        const ms = Date.now() - (xhr.__tr_start || Date.now());
-        const resHeaders = ebParseHeaders(xhr.getAllResponseHeaders ? xhr.getAllResponseHeaders() : '');
-        TREventBus.emit({ type:'net:xhr', phase:'end', method:xhr.__tr_method || '', url:xhr.__tr_url || '', status:xhr.status, ok:(xhr.status>=200 && xhr.status<300), ms, reqHeaders:{}, resHeaders, reqBody:ebPreview(xhr.__tr_body), resBody:ebPreview(xhr.response), ts:Date.now() });
-      });
-      logActivity('xhr-send', this.__tr_url || '');
-      return origSend.call(this, body);
-    };
-  }
-
-  // WebSocket
-  if (global.WebSocket){
-    const OrigWebSocket = global.WebSocket;
-    global.WebSocket = function(url, protocols){
-      const ws = new OrigWebSocket(url, protocols);
-      ws.__tr_url = url;
-      TREventBus.emit({ type:'ws:open', url, data:undefined, ts:Date.now() });
-      logActivity('websocket', url);
-      const origSend = ws.send;
-      ws.send = function(data){
-        TREventBus.emit({ type:'ws:send', url:ws.__tr_url, data:ebPreview(data), ts:Date.now() });
-        return origSend.call(ws, data);
+    // fetch
+    if (global.fetch && !global.fetch[WRAP_FLAG]){
+      const origFetch = global.fetch;
+      const wrappedFetch = async function(...args){
+        const input = args[0]; const init = args[1] || {};
+        const method = (init && init.method) || (input && input.method) || 'GET';
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const start = Date.now();
+        const reqHeaders = ebHeadersToObj(init.headers || (input && input.headers));
+        const reqBody = init && init.body;
+        TREventBus.emit({ type:'net:fetch', phase:'start', method, url, status:0, ok:false, ms:0, reqHeaders, resHeaders:{}, reqBody:ebPreview(reqBody), resBody:'', ts:start });
+        logActivity('fetch', String(args[0]));
+        try{
+          const res = await origFetch.apply(this, args);
+          let resHeaders = {};
+          try{ res.headers.forEach((v,k)=>resHeaders[k]=v); }catch(_e){}
+          let resBody = '';
+          try{ resBody = await res.clone().text(); }catch(_e){}
+          const ms = Date.now() - start;
+          TREventBus.emit({ type:'net:fetch', phase:'end', method, url, status:res.status, ok:res.ok, ms, reqHeaders, resHeaders, reqBody:ebPreview(reqBody), resBody:ebPreview(resBody), ts:Date.now() });
+          logActivity('fetch-response', res.url || '');
+          return res;
+        }catch(e){
+          const ms = Date.now() - start;
+          TREventBus.emit({ type:'net:fetch', phase:'error', method, url, status:0, ok:false, ms, reqHeaders, resHeaders:{}, reqBody:ebPreview(reqBody), resBody:String(e), ts:Date.now() });
+          logActivity('fetch-error', e && e.message || '');
+          throw e;
+        }
       };
-      ws.addEventListener('message', ev=>{
-        TREventBus.emit({ type:'ws:message', url:ws.__tr_url, data:ebPreview(ev.data), ts:Date.now() });
-        logActivity('ws-message', ev.data);
-      });
-      ws.addEventListener('close', ev=>{
-        TREventBus.emit({ type:'ws:close', url:ws.__tr_url, code:ev.code, reason:ev.reason, ts:Date.now() });
-      });
-      return ws;
-    };
-  }
-
-  // EventSource
-  if (global.EventSource){
-    const OrigEventSource = global.EventSource;
-    global.EventSource = function(url, opts){
-      const es = new OrigEventSource(url, opts);
-      logActivity('eventsource', url);
-      es.addEventListener('message', ev=>{
-        TREventBus.emit({ type:'sse:message', url, event:ev.type, data:ebPreview(ev.data), ts:Date.now() });
-        logActivity('es-message', ev.data);
-      });
-      return es;
-    };
-  }
-
-  // postMessage
-  if (global.postMessage){
-    const origPostMessage = global.postMessage;
-    global.postMessage = function(msg, target, transfer){
-      try{
-        TREventBus.emit({ type:'pm:post', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:ebPreview(msg), ts:Date.now() });
-      }catch(_e){}
-      try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
-      return origPostMessage.call(this, msg, target, transfer);
-    };
-    if (global.addEventListener){
-      global.addEventListener('message', ev=>{
-        try{ TREventBus.emit({ type:'pm:message', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
-      });
+      wrappedFetch[WRAP_FLAG] = true;
+      __trOrig.set(wrappedFetch, origFetch);
+      global.fetch = wrappedFetch;
     }
-  }
 
-  // BroadcastChannel
-  if (global.BroadcastChannel){
-    const OrigBC = global.BroadcastChannel;
-    global.BroadcastChannel = function(name){
-      logActivity('broadcastchannel', name);
-      const bc = new OrigBC(name);
-      TREventBus.emit({ type:'pm:bc-open', channel:name, origin:(location && location.origin)||'', target:name, size:0, data:null, ts:Date.now() });
-      const origBCPost = bc.postMessage;
-      bc.postMessage = function(msg){
-        try{ TREventBus.emit({ type:'pm:bc-post', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
-        try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
-        return origBCPost.call(bc, msg);
+    // XMLHttpRequest
+    if (global.XMLHttpRequest){
+      const origOpen = XMLHttpRequest.prototype.open;
+      const origSend = XMLHttpRequest.prototype.send;
+      if (!XMLHttpRequest.prototype.open[WRAP_FLAG]){
+        XMLHttpRequest.prototype.open = function(method, url, ...rest){
+          this.__tr_url = url; this.__tr_method = method; this.__tr_start = Date.now();
+          TREventBus.emit({ type:'net:xhr', phase:'start', method, url, status:0, ok:false, ms:0, reqHeaders:{}, resHeaders:{}, reqBody:'', resBody:'', ts:this.__tr_start });
+          logActivity('xhr-open', method + ' ' + url);
+          return origOpen.call(this, method, url, ...rest);
+        };
+        XMLHttpRequest.prototype.open[WRAP_FLAG] = true;
+        __trOrig.set(XMLHttpRequest.prototype.open, origOpen);
+      }
+      if (!XMLHttpRequest.prototype.send[WRAP_FLAG]){
+        XMLHttpRequest.prototype.send = function(body){
+          this.__tr_body = body;
+          const xhr = this;
+          xhr.addEventListener('loadend', function(){
+            const ms = Date.now() - (xhr.__tr_start || Date.now());
+            const resHeaders = ebParseHeaders(xhr.getAllResponseHeaders ? xhr.getAllResponseHeaders() : '');
+            TREventBus.emit({ type:'net:xhr', phase:'end', method:xhr.__tr_method || '', url:xhr.__tr_url || '', status:xhr.status, ok:(xhr.status>=200 && xhr.status<300), ms, reqHeaders:{}, resHeaders, reqBody:ebPreview(xhr.__tr_body), resBody:ebPreview(xhr.response), ts:Date.now() });
+          });
+          logActivity('xhr-send', this.__tr_url || '');
+          return origSend.call(this, body);
+        };
+        XMLHttpRequest.prototype.send[WRAP_FLAG] = true;
+        __trOrig.set(XMLHttpRequest.prototype.send, origSend);
+      }
+    }
+
+    // WebSocket
+    if (global.WebSocket && !global.WebSocket[WRAP_FLAG]){
+      const OrigWebSocket = global.WebSocket;
+      const WrappedWS = function(url, protocols){
+        const ws = new OrigWebSocket(url, protocols);
+        ws.__tr_url = url;
+        TREventBus.emit({ type:'ws:open', url, data:undefined, ts:Date.now() });
+        logActivity('websocket', url);
+        const origSend = ws.send;
+        ws.send = function(data){
+          TREventBus.emit({ type:'ws:send', url:ws.__tr_url, data:ebPreview(data), ts:Date.now() });
+          return origSend.call(ws, data);
+        };
+        ws.addEventListener('message', ev=>{
+          TREventBus.emit({ type:'ws:message', url:ws.__tr_url, data:ebPreview(ev.data), ts:Date.now() });
+          logActivity('ws-message', ev.data);
+        });
+        ws.addEventListener('close', ev=>{
+          TREventBus.emit({ type:'ws:close', url:ws.__tr_url, code:ev.code, reason:ev.reason, ts:Date.now() });
+        });
+        return ws;
       };
-      bc.addEventListener('message', ev=>{
-        try{ TREventBus.emit({ type:'pm:bc-msg', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
-        try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); }
-      });
-      return bc;
-    };
-  }
+      WrappedWS[WRAP_FLAG] = true;
+      __trOrig.set(WrappedWS, OrigWebSocket);
+      global.WebSocket = WrappedWS;
+    }
+
+    // EventSource
+    if (global.EventSource && !global.EventSource[WRAP_FLAG]){
+      const OrigEventSource = global.EventSource;
+      const WrappedES = function(url, opts){
+        const es = new OrigEventSource(url, opts);
+        logActivity('eventsource', url);
+        es.addEventListener('message', ev=>{
+          TREventBus.emit({ type:'sse:message', url, event:ev.type, data:ebPreview(ev.data), ts:Date.now() });
+          logActivity('es-message', ev.data);
+        });
+        return es;
+      };
+      WrappedES[WRAP_FLAG] = true;
+      __trOrig.set(WrappedES, OrigEventSource);
+      global.EventSource = WrappedES;
+    }
+
+    // postMessage
+    if (global.postMessage && !global.postMessage[WRAP_FLAG]){
+      const origPostMessage = global.postMessage;
+      const wrappedPost = function(msg, target, transfer){
+        try{
+          TREventBus.emit({ type:'pm:post', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:ebPreview(msg), ts:Date.now() });
+        }catch(_e){}
+        try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
+        return origPostMessage.call(this, msg, target, transfer);
+      };
+      wrappedPost[WRAP_FLAG] = true;
+      __trOrig.set(wrappedPost, origPostMessage);
+      global.postMessage = wrappedPost;
+      if (global.addEventListener){
+        global.addEventListener('message', ev=>{
+          try{ TREventBus.emit({ type:'pm:message', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+        });
+      }
+    }
+
+    // BroadcastChannel
+    if (global.BroadcastChannel && !global.BroadcastChannel[WRAP_FLAG]){
+      const OrigBC = global.BroadcastChannel;
+      const WrappedBC = function(name){
+        logActivity('broadcastchannel', name);
+        const bc = new OrigBC(name);
+        TREventBus.emit({ type:'pm:bc-open', channel:name, origin:(location && location.origin)||'', target:name, size:0, data:null, ts:Date.now() });
+        const origBCPost = bc.postMessage;
+        bc.postMessage = function(msg){
+          try{ TREventBus.emit({ type:'pm:bc-post', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
+          try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
+          return origBCPost.call(bc, msg);
+        };
+        bc.addEventListener('message', ev=>{
+          try{ TREventBus.emit({ type:'pm:bc-msg', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+          try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); }
+        });
+        return bc;
+      };
+      WrappedBC[WRAP_FLAG] = true;
+      __trOrig.set(WrappedBC, OrigBC);
+      global.BroadcastChannel = WrappedBC;
+    }
 
   // Service Workers
   if (global.navigator && global.navigator.serviceWorker){
@@ -4656,104 +4745,120 @@ updateRuntimeBadge();
     }).catch(e=>logActivity('sw-error', e && e.message || ''));
   }
 
-  // atob
-  if (global.atob){
-    const origAtob = global.atob;
-    global.atob = function(str){
-      logActivity('atob', str);
-      const out = origAtob.call(this, str);
-      const ts = Date.now();
-      addCodecLog({ codec:'atob', input:str, output:out, length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
-      TREventBus.emit({ type:'codec:atob', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts });
-      return out;
-    };
-  }
-
-  // btoa
-  if (global.btoa){
-    const origBtoa = global.btoa;
-    global.btoa = function(str){
-      logActivity('btoa', str);
-      const out = origBtoa.call(this, str);
-      if (codecCfg.btoa){
+    // atob
+    if (global.atob && !global.atob[WRAP_FLAG]){
+      const origAtob = global.atob;
+      const wrappedAtob = function(str){
+        logActivity('atob', str);
+        const out = origAtob.call(this, str);
         const ts = Date.now();
-        addCodecLog({ codec:'btoa', input:str, output:out, length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
-        TREventBus.emit({ type:'codec:btoa', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts });
-      }
-      return out;
-    };
-  }
-
-  // TextDecoder
-  if (global.TextDecoder){
-    const OrigTD = global.TextDecoder;
-    global.TextDecoder = function(...args){
-      const td = new OrigTD(...args);
-      const origDecode = td.decode;
-      td.decode = function(...dargs){
-        const res = origDecode.apply(td, dargs);
-        logActivity('textdecoder', res);
-        if (codecCfg.text){
-          const ts = Date.now();
-          addCodecLog({ codec:'textdecoder', input:dargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts, inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(dargs[0]), outputFull:ebToString(res) });
-          TREventBus.emit({ type:'codec:decode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts });
-        }
-        return res;
+        addCodecLog({ codec:'atob', input:str, output:out, length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
+        TREventBus.emit({ type:'codec:atob', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts });
+        return out;
       };
-      return td;
-    };
-  }
+      wrappedAtob[WRAP_FLAG] = true;
+      __trOrig.set(wrappedAtob, origAtob);
+      global.atob = wrappedAtob;
+    }
 
-  // TextEncoder
-  if (global.TextEncoder){
-    const OrigTE = global.TextEncoder;
-    global.TextEncoder = function(...args){
-      const te = new OrigTE(...args);
-      const origEncode = te.encode;
-      te.encode = function(...eargs){
-        const res = origEncode.apply(te, eargs);
-        logActivity('textencoder', eargs[0]);
-        if (codecCfg.text){
+    // btoa
+    if (global.btoa && !global.btoa[WRAP_FLAG]){
+      const origBtoa = global.btoa;
+      const wrappedBtoa = function(str){
+        logActivity('btoa', str);
+        const out = origBtoa.call(this, str);
+        if (codecCfg.btoa){
           const ts = Date.now();
-          addCodecLog({ codec:'textencoder', input:eargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts, inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(eargs[0]), outputFull:ebToString(res) });
-          TREventBus.emit({ type:'codec:encode', inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts });
+          addCodecLog({ codec:'btoa', input:str, output:out, length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
+          TREventBus.emit({ type:'codec:btoa', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts });
         }
-        return res;
+        return out;
       };
-      return te;
-    };
-  }
+      wrappedBtoa[WRAP_FLAG] = true;
+      __trOrig.set(wrappedBtoa, origBtoa);
+      global.btoa = wrappedBtoa;
+    }
 
-  // crypto.subtle
-  if (global.crypto && global.crypto.subtle){
-    const s = global.crypto.subtle;
-    ['encrypt','decrypt','digest'].forEach(op=>{
-      if (typeof s[op] === 'function'){
-        const orig = s[op].bind(s);
-        s[op] = async function(...args){
-          const alg = args[0];
-          const res = await orig(...args);
-          let len = res && (res.byteLength || res.length) || 0;
-          let sample = '';
-          let iv = '';
-          try{ sample = ebPreview(new Uint8Array(res).slice(0,16)); }catch(_e){}
-          try{ if(alg && alg.iv) iv = ebPreview(new Uint8Array(alg.iv).slice(0,16)); }catch(_e){}
-          try{ TREventBus.emit({ type:`crypto:${op}`, alg: (alg && alg.name)||String(alg), ivPreview:redact(iv), length: len, sample:redact(sample), ts:Date.now() }); }catch(_e){}
+    // TextDecoder
+    if (global.TextDecoder && !global.TextDecoder[WRAP_FLAG]){
+      const OrigTD = global.TextDecoder;
+      const WrappedTD = function(...args){
+        const td = new OrigTD(...args);
+        const origDecode = td.decode;
+        td.decode = function(...dargs){
+          const res = origDecode.apply(td, dargs);
+          logActivity('textdecoder', res);
+          if (codecCfg.text){
+            const ts = Date.now();
+            addCodecLog({ codec:'textdecoder', input:dargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts, inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(dargs[0]), outputFull:ebToString(res) });
+            TREventBus.emit({ type:'codec:decode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts });
+          }
           return res;
         };
-      }
-    });
-    if (s.exportKey){
-      const origExportKey = s.exportKey.bind(s);
-      s.exportKey = async function(format, key){
-        const res = await origExportKey(format, key);
-        let len = res && (res.byteLength || res.length) || 0;
-        try{ TREventBus.emit({ type:'crypto:exportKey', alg:format, length:len, sample:redact(ebPreview(res,80)), ts:Date.now() }); }catch(_e){}
-        logActivity('exportKey', format);
-        return res;
+        return td;
       };
+      WrappedTD[WRAP_FLAG] = true;
+      __trOrig.set(WrappedTD, OrigTD);
+      global.TextDecoder = WrappedTD;
     }
-  }
+
+    // TextEncoder
+    if (global.TextEncoder && !global.TextEncoder[WRAP_FLAG]){
+      const OrigTE = global.TextEncoder;
+      const WrappedTE = function(...args){
+        const te = new OrigTE(...args);
+        const origEncode = te.encode;
+        te.encode = function(...eargs){
+          const res = origEncode.apply(te, eargs);
+          logActivity('textencoder', eargs[0]);
+          if (codecCfg.text){
+            const ts = Date.now();
+            addCodecLog({ codec:'textencoder', input:eargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts, inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(eargs[0]), outputFull:ebToString(res) });
+            TREventBus.emit({ type:'codec:encode', inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts });
+          }
+          return res;
+        };
+        return te;
+      };
+      WrappedTE[WRAP_FLAG] = true;
+      __trOrig.set(WrappedTE, OrigTE);
+      global.TextEncoder = WrappedTE;
+    }
+
+    // crypto.subtle
+    if (global.crypto && global.crypto.subtle){
+      const s = global.crypto.subtle;
+      ['encrypt','decrypt','digest'].forEach(op=>{
+        if (typeof s[op] === 'function' && !s[op][WRAP_FLAG]){
+          const orig = s[op].bind(s);
+          s[op] = async function(...args){
+            const alg = args[0];
+            const res = await orig(...args);
+            let len = res && (res.byteLength || res.length) || 0;
+            let sample = '';
+            let iv = '';
+            try{ sample = ebPreview(new Uint8Array(res).slice(0,16)); }catch(_e){}
+            try{ if(alg && alg.iv) iv = ebPreview(new Uint8Array(alg.iv).slice(0,16)); }catch(_e){}
+            try{ TREventBus.emit({ type:`crypto:${op}`, alg: (alg && alg.name)||String(alg), ivPreview:redact(iv), length: len, sample:redact(sample), ts:Date.now() }); }catch(_e){}
+            return res;
+          };
+          s[op][WRAP_FLAG] = true;
+          __trOrig.set(s[op], orig);
+        }
+      });
+      if (s.exportKey && !s.exportKey[WRAP_FLAG]){
+        const origExportKey = s.exportKey.bind(s);
+        s.exportKey = async function(format, key){
+          const res = await origExportKey(format, key);
+          let len = res && (res.byteLength || res.length) || 0;
+          try{ TREventBus.emit({ type:'crypto:exportKey', alg:format, length:len, sample:redact(ebPreview(res,80)), ts:Date.now() }); }catch(_e){}
+          logActivity('exportKey', format);
+          return res;
+        };
+        s.exportKey[WRAP_FLAG] = true;
+        __trOrig.set(s.exportKey, origExportKey);
+      }
+    }
 
   // storage & JWT
   function analyzeJWT(token){

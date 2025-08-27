@@ -2971,6 +2971,20 @@ updateRuntimeBadge();
   dbgRefs.limit.value = dbgLimit;
   dbgRefs.fetch.textContent = `Descargar y Demapear (≤${dbgLimit}MB)`;
   const dbg = { findings: [], maps: [], sources: [] };
+  try{
+    if(typeof GM_getValue==='function'){
+      const saved = GM_getValue(`${site}_dbg_data`);
+      if(saved){
+        const obj = JSON.parse(saved);
+        if(Array.isArray(obj.findings)) dbg.findings=obj.findings;
+        if(Array.isArray(obj.maps)) dbg.maps=obj.maps;
+        if(Array.isArray(obj.sources)) obj.sources.forEach(s=>{
+          const map = dbg.maps.find(m=>m.url===s.mapUrl);
+          dbg.sources.push({file:s.file, content:s.content, map});
+        });
+      }
+    }
+  }catch(_e){}
   function fmtBytes(n){ if(n==null||isNaN(n)) return ''; const u=['B','KB','MB','GB']; let i=0; while(n>=1024&&i<u.length-1){ n/=1024; i++; } return n.toFixed(1)+u[i]; }
   function dbgRender(){
     if (dbgTabBtn) dbgTabBtn.textContent = `Source Maps / Debug Artefacts (${dbg.findings.length})`;
@@ -2978,10 +2992,24 @@ updateRuntimeBadge();
     dbg.findings.forEach(f=>{
       const div=document.createElement('div'); div.className='ptk-row';
       const st=f.status?` · ${f.status}`:'';
-      const sz=f.size?` · ${fmtBytes(f.size)}${f.truncated?' (truncado)':''}`:'';
-      div.innerHTML = `<div style="opacity:.8">${escHTML(f.url)}</div><div>${f.artefact}${st}${sz}</div>`;
+      const sz=f.size?` · ${fmtBytes(f.size)}${f.truncated?' [truncated]':''}`:'';
+      const ex=f.extra&&f.extra.length?` · ${f.extra.length} hallazgos`:'';
+      div.innerHTML = `<div style="opacity:.8">${escHTML(f.url)}</div><div>${f.artefact}${st}${sz}${ex}</div>`;
       dbgRefs.results.appendChild(div);
     });
+  }
+  dbgRender();
+  function dbgPersist(){
+    try{
+      if(typeof GM_setValue==='function'){
+        const data={
+          findings: dbg.findings,
+          maps: dbg.maps,
+          sources: dbg.sources.map(s=>({file:s.file, content:s.content, mapUrl:s.map?s.map.url:null}))
+        };
+        GM_setValue(`${site}_dbg_data`, JSON.stringify(data));
+      }
+    }catch(_e){}
   }
   dbgRefs.limit.addEventListener('change',()=>{
     dbgLimit = Number(dbgRefs.limit.value)||DEBUG.DEFAULT_MAX_MB;
@@ -2995,12 +3023,22 @@ updateRuntimeBadge();
     let pending=resources.length;
     if(!pending){ dbgRefs.status.textContent='Listo'; return; }
     dbgRefs.status.textContent='Buscando…';
-    const done=()=>{ if(--pending===0){ dbgRefs.status.textContent='Listo'; dbgRender(); } };
+    const done=()=>{ if(--pending===0){ dbgRefs.status.textContent='Listo'; dbgRender(); dbgPersist(); } };
     resources.forEach(el=>{
       const url=el.src||el.href||''; if(!url){ done(); return; }
       if(/\/_next\//.test(url)) dbg.findings.push({url,status:'',size:0,artefact:'_next/'});
       if(/__webpack_hmr/.test(url)) dbg.findings.push({url,status:'',size:0,artefact:'__webpack_hmr'});
-      if(/@vite|\/vite\//.test(url)) dbg.findings.push({url,status:'',size:0,artefact:'vite'});
+      if(/@vite\/client/.test(url)) dbg.findings.push({url,status:'',size:0,artefact:'@vite/client'});
+      if(/\.map(\?|#|$)/i.test(url)){
+        const info={url,status:'?',size:0,artefact:'map'};
+        dbg.findings.push(info); dbg.maps.push(info);
+        GM_xmlhttpRequest({method:'HEAD',url,timeout:DEBUG.TIMEOUT_MS,
+          onload:r2=>{info.status=r2.status; const m2=(r2.responseHeaders||'').match(/content-length:\s*(\d+)/i); info.size=m2?Number(m2[1]):0; dbgRender(); done();},
+          onerror:()=>{info.status='error'; dbgRender(); done();},
+          ontimeout:()=>{info.status='timeout'; dbgRender(); done();}
+        });
+        return;
+      }
       GM_xmlhttpRequest({method:'GET',url,timeout:DEBUG.TIMEOUT_MS,
         onload:res=>{
           const m=res.responseText.match(/[#@]\s*sourceMappingURL=([^\s\n]+)/);
@@ -3033,38 +3071,67 @@ updateRuntimeBadge();
           try{
             const bytes=typeof TextEncoder!=='undefined'?new TextEncoder().encode(res.responseText||'').length:(res.responseText||'').length;
             info.size=bytes;
-            if(bytes>maxBytes){info.truncated=true;}else{
+            if(bytes>maxBytes){info.truncated=true; finalize();}
+            else{
               const sm=JSON.parse(res.responseText);
               const base=info.url.replace(/[^/]+$/, '');
               const sroot=sm.sourceRoot||'';
+              let sub=0;
+              const doneSrc=()=>{ if(--sub===0) finalize(); };
               (sm.sources||[]).forEach((s,i)=>{
+                const abs=new URL(s, base+sroot).href;
                 const content=sm.sourcesContent&&sm.sourcesContent[i];
                 if(typeof content==='string'){
-                  const abs=new URL(s, base+sroot).href;
-                  dbg.sources.push({file:abs, content});
+                  dbg.sources.push({file:abs, content, map:info});
+                } else {
+                  sub++;
+                  GM_xmlhttpRequest({method:'GET',url:abs,timeout:DEBUG.TIMEOUT_MS,
+                    onload:r3=>{
+                      const txt=r3.responseText||'';
+                      const b2=typeof TextEncoder!=='undefined'?new TextEncoder().encode(txt).length:txt.length;
+                      if(b2>maxBytes){ info.truncated=true; }
+                      else dbg.sources.push({file:abs, content:txt, map:info});
+                      doneSrc();
+                    },
+                    onerror:doneSrc,
+                    ontimeout:doneSrc
+                  });
                 }
               });
+              if(sub===0) finalize();
             }
-          }catch(e){logError(e);}
-          if(--pending===0){dbgRefs.status.textContent='Maps procesados'; dbgRender();}
+          }catch(e){ logError(e); finalize(); }
         },
-        onerror:()=>{info.status='error'; if(--pending===0){dbgRefs.status.textContent='Maps procesados'; dbgRender();}},
-        ontimeout:()=>{info.status='timeout'; if(--pending===0){dbgRefs.status.textContent='Maps procesados'; dbgRender();}}
+        onerror:()=>{ info.status='error'; finalize(); },
+        ontimeout:()=>{ info.status='timeout'; finalize(); }
       });
+      function finalize(){ if(--pending===0){ dbgRefs.status.textContent='Maps procesados'; dbgRender(); dbgPersist(); } }
     });
   }
   function dbgRescan(){
     if(!dbg.sources.length){ dbgRefs.status.textContent='Sin fuentes'; return; }
     dbgRefs.status.textContent='Re-escaneando…';
-    dbg.sources.forEach(src=>{ try{ jsScanText(src.file, src.content); }catch(e){ logError(e); } });
+    dbg.maps.forEach(m=>{ m.extra=[]; });
+    dbg.sources.forEach(src=>{
+      try{
+        const before=jh.findings.length;
+        jsScanText(src.file, src.content);
+        const after=jh.findings.slice(before);
+        if(after.length && src.map){
+          if(!src.map.extra) src.map.extra=[];
+          src.map.extra.push(...after);
+        }
+      }catch(e){ logError(e); }
+    });
     jsRender();
     dbgRefs.status.textContent='JS Hunter actualizado';
+    dbgPersist();
   }
   dbgRefs.list.onclick=dbgList;
   dbgRefs.fetch.onclick=dbgFetch;
   dbgRefs.rescan.onclick=dbgRescan;
   dbgRefs.copy.onclick=()=>{ const out=JSON.stringify(dbg.findings,null,2); clip(out); dbgRefs.copy.textContent='¡Copiado!'; setTimeout(()=>dbgRefs.copy.textContent='Copiar JSON',1200); };
-  dbgRefs.csv.onclick=()=>{ const head=['url','status','size','artefact']; csvDownload(`debug_maps_${nowStr()}.csv`, head, dbg.findings.map(f=>({url:f.url,status:f.status,size:f.size,artefact:f.artefact}))); };
+  dbgRefs.csv.onclick=()=>{ const head=['url','status','size','artefact','extra']; csvDownload(`debug_maps_${nowStr()}.csv`, head, dbg.findings.map(f=>({url:f.url,status:f.status,size:f.size,artefact:f.artefact,extra: f.extra?JSON.stringify(f.extra):''}))); };
 
   /* ============================
      VERSIONS (cola única, anti-stall; headers 1x/host; externos solo si referenciados)

@@ -619,7 +619,7 @@ if (typeof window !== 'undefined') (function () {
           <div class="ptk-tab" data-tab="ratelimit">Rate-Limit Probe (0)</div>
           <div class="ptk-tab" data-tab="fuzzer">API Fuzzer (0)</div>
         </div>
-        <section id="tab_apis_openapi"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_openapi"></section>
         <section id="tab_apis_graphql" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_apis_cors" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_apis_ratelimit" style="display:none"><div class="ptk-row">Placeholder</div></section>
@@ -2202,6 +2202,58 @@ rsRefs.pmToggle.onclick=()=>{
     pump();
   }
 
+
+  /* ============================
+     OpenAPI/Swagger discovery
+  ============================ */
+  const tabOA = panel.querySelector('#tab_apis_openapi');
+  const oaTabBtn = panel.querySelector('#tabs_apis .ptk-tab[data-tab="openapi"]');
+  tabOA.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">OpenAPI/Swagger</div>
+        <div class="ptk-grid">
+          <button id="oa_scan" class="ptk-btn">Detectar + Probar</button>
+          <button id="oa_clear" class="ptk-btn">Clear</button>
+          <button id="oa_csv" class="ptk-btn">CSV</button>
+          <label><input type="checkbox" id="oa_safe" checked> Safe Mode</label>
+        </div>
+      </div>
+      <div id="oa_status" style="margin:6px 0">En espera…</div>
+      <div id="oa_results"></div>
+    </div>
+  `;
+  const oaRefs = {
+    scan: tabOA.querySelector('#oa_scan'), clear: tabOA.querySelector('#oa_clear'),
+    csv: tabOA.querySelector('#oa_csv'), safe: tabOA.querySelector('#oa_safe'),
+    status: tabOA.querySelector('#oa_status'), results: tabOA.querySelector('#oa_results')
+  };
+  const OA = { TIMEOUT_MS:8000, MAX_CONCURRENCY:4, DELAY_MS:200 };
+  const oa = { queue:[], findings:[], idx:0, inFlight:0, session:0 };
+  try{ if(typeof GM_getValue==='function') oa.findings=JSON.parse(GM_getValue(`${site}_openapi`, '[]'))||[]; }catch(_e){}
+  oa.findings.forEach(f=>oaRender(f));
+  oaUpdateCount();
+  try{ if(typeof GM_getValue==='function') oaRefs.safe.checked=GM_getValue(`${site}_openapi_safe`, true); }catch(_e){}
+  oaRefs.safe.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_openapi_safe`, oaRefs.safe.checked); }catch(_e){} };
+  function oaUpdateCount(){ if(oaTabBtn) oaTabBtn.textContent=`OpenAPI/Swagger (${oa.findings.length})`; }
+  function oaPersist(){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_openapi`, JSON.stringify(oa.findings)); }catch(_e){} }
+  function oaRender(f){ const fam=family(f.status); const div=document.createElement('div'); div.className='ptk-row'; div.innerHTML=`<div><b>${f.method}</b> <a class="ptk-link" href="${f.url}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${f.url}</a></div><div class="ptk-code" style="color:${famColor(fam)}">HTTP ${f.status} · ${f.ms}ms · ${f.headers}</div>`; oaRefs.results.appendChild(div); }
+  function oaAddFinding(url,method,status,ms,headers){ const rec={url,method,status,ms,headers}; oa.findings.push(rec); oaRender(rec); oaUpdateCount(); oaPersist(); }
+  function oaKeyHeaders(h){ const ct=/content-type:\s*([^\n\r]+)/i.exec(h); const allow=/allow:\s*([^\n\r]+)/i.exec(h); const server=/server:\s*([^\n\r]+)/i.exec(h); const a=[]; if(ct) a.push(`CT:${ct[1].trim()}`); if(allow) a.push(`Allow:${allow[1].trim()}`); if(server) a.push(`Server:${server[1].trim()}`); return a.join(' | '); }
+  function oaCandidates(){
+    const base=['/swagger.json','/swagger/v1/swagger.json','/swagger/v2/swagger.json','/v1/swagger.json','/v2/swagger.json','/openapi.json','/v1/openapi.json','/v2/openapi.json','/api/swagger.json','/api/openapi.json','/api-docs','/v3/api-docs','/v2/api-docs'];
+    const fromDOM=[...document.querySelectorAll('a[href],link[href],script[src]')]
+      .map(n=>n.getAttribute('href')||n.getAttribute('src')||'')
+      .filter(v=>/swagger|openapi|api-docs/i.test(v||''))
+      .map(v=>v.replace(/#.*/,''));
+    return unique([...base,...fromDOM]).map(s=>/^https?:/i.test(s)?s:'/'+s.replace(/^\/+/,''));
+  }
+  function oaQueueFromSpec(specUrl, spec){ const base=(spec.servers&&spec.servers[0]&&spec.servers[0].url)||specUrl; Object.keys(spec.paths||{}).forEach(p=>{ if(/\{/.test(p)) return; let abs; try{ abs=new URL(p, base).href; }catch(_e){ return; } if(!sameOrigin(abs)) return; oa.queue.push({url:abs,method:'GET'}); oa.queue.push({url:abs,method:'HEAD'}); }); }
+  function oaFetchSpecs(done){ const seeds=oaCandidates(); if(!seeds.length){ done(); return; } let pending=seeds.length; seeds.forEach(s=>{ const url=mkAbs(s); if(!url||!sameOrigin(url)){ if(--pending===0) done(); return; } GM_xmlhttpRequest({ method:'GET', url, timeout:OA.TIMEOUT_MS, onload:res=>{ if(res.status===200){ try{ const spec=JSON.parse(res.responseText); oaQueueFromSpec(url, spec); }catch(_e){} } }, onerror:()=>{}, ontimeout:()=>{}, onloadend:()=>{ if(--pending===0) done(); } }); }); }
+  function oaPump(){ if(oa.idx>=oa.queue.length && oa.inFlight===0){ oaRefs.status.textContent=`Finalizado. Endpoints: ${oa.queue.length/2}`; return; } while(oa.inFlight<OA.MAX_CONCURRENCY && oa.idx<oa.queue.length){ const {url,method}=oa.queue[oa.idx++]; const t0=performance.now(); oa.inFlight++; oaRefs.status.textContent=`${method} ${url}`; GM_xmlhttpRequest({ method, url, timeout:OA.TIMEOUT_MS, onload:res=>{ const ms=Math.round(performance.now()-t0); const hdr=oaKeyHeaders(res.responseHeaders||''); oaAddFinding(url,method,res.status,ms,hdr); }, onerror:()=>{ const ms=Math.round(performance.now()-t0); oaAddFinding(url,method,'ERR',ms,''); }, ontimeout:()=>{ const ms=Math.round(performance.now()-t0); oaAddFinding(url,method,'TIMEOUT',ms,''); }, onloadend:()=>{ oa.inFlight--; setTimeout(oaPump, OA.DELAY_MS); } }); } }
+  function oaStart(){ oa.queue=[]; oa.idx=0; oa.inFlight=0; oa.session++; oaRefs.results.innerHTML=''; oa.findings.length=0; oaUpdateCount(); oaPersist(); oaRefs.status.textContent='Buscando specs...'; oaFetchSpecs(()=>{ if(!oa.queue.length){ oaRefs.status.textContent='Sin specs válidos'; return; } oaRefs.status.textContent=`Probando ${oa.queue.length} requests...`; oaPump(); }); }
+  function oaClear(){ oa.queue=[]; oa.findings.length=0; oa.idx=0; oa.inFlight=0; oaRefs.results.innerHTML=''; oaRefs.status.textContent='En espera…'; oaUpdateCount(); oaPersist(); }
+  oaRefs.scan.onclick=oaStart; oaRefs.clear.onclick=oaClear; oaRefs.csv.onclick=()=>{ const head=['url','method','status','ms','headers']; csvDownload(`openapi_${nowStr()}.csv`, head, oa.findings); };
 
   /* ============================
      API Fuzzer (sin cambios, CSV con file/line)

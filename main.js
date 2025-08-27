@@ -299,6 +299,7 @@ if (typeof window !== 'undefined') (function () {
   const VERS  = { TIMEOUT_MS: 9000, BYTES_HEAD: 3500, MAX_CONCURRENCY: 5 };
   const FUZZ  = { MAX_CONCURRENCY: 4, TIMEOUT_MS: 9000, SAFE_MODE: true, DELAY_MS: 120 };
   const BUCKS = { TIMEOUT_MS: 9000, JS_DETECT_MAX_CONC: 6 };
+  const DEBUG = { TIMEOUT_MS: 8000, DEFAULT_MAX_MB: 5 };
 
   /* ============================
      Shadow DOM host (anti-CSS)
@@ -597,7 +598,18 @@ if (typeof window !== 'undefined') (function () {
         <section id="tab_discover_files"></section>
         <section id="tab_discover_js" style="display:none"></section>
         <section id="tab_discover_crawler" style="display:none"></section>
-        <section id="tab_discover_debug" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_discover_debug" style="display:none">
+          <div class="ptk-row">
+            <button id="dbg_list">Listar maps</button>
+            <button id="dbg_fetch">Descargar y Demapear (≤5MB)</button>
+            <button id="dbg_rescan">Re-escanear con JS Hunter</button>
+            <button id="dbg_copy">Copiar JSON</button>
+            <button id="dbg_csv">CSV</button>
+            <label>Límite MB <input type="number" id="dbg_limit" style="width:60px" min="1"></label>
+            <span id="dbg_status">En espera…</span>
+          </div>
+          <div id="dbg_results"></div>
+        </section>
       </div>
       <div id="top_apis" style="display:none">
         <div class="ptk-tabs" id="tabs_apis">
@@ -1787,7 +1799,122 @@ rsRefs.pmToggle.onclick=()=>{
   crRefs.copy.onclick=()=>{ const out=JSON.stringify({pages:cr.pages, assets:unique(cr.assets)}, null, 2); clip(out); crRefs.copy.textContent='¡Copiado!'; setTimeout(()=>crRefs.copy.textContent='Copiar JSON',1200); };
   crRefs.csv.onclick=()=>{ const head=['file','line','url','status','contentType','title','note']; csvDownload(`crawl_pages_${nowStr()}.csv`, head, cr.pages.map(p=>({file:p.file,line:p.line,url:p.url,status:p.status,contentType:p.contentType,title:p.title||'',note:p.note||''}))); };
 
-   /* ============================
+  /* ============================
+     Source Maps / Debug Artefacts
+  ============================ */
+  const tabDebug = panel.querySelector('#tab_discover_debug');
+  const dbgTabBtn = panel.querySelector('#tabs_discover .ptk-tab[data-tab="debug"]');
+  const dbgRefs = {
+    list: tabDebug.querySelector('#dbg_list'),
+    fetch: tabDebug.querySelector('#dbg_fetch'),
+    rescan: tabDebug.querySelector('#dbg_rescan'),
+    copy: tabDebug.querySelector('#dbg_copy'),
+    csv: tabDebug.querySelector('#dbg_csv'),
+    limit: tabDebug.querySelector('#dbg_limit'),
+    status: tabDebug.querySelector('#dbg_status'),
+    results: tabDebug.querySelector('#dbg_results')
+  };
+  let dbgLimit = DEBUG.DEFAULT_MAX_MB;
+  try{ if (typeof GM_getValue === 'function') dbgLimit = Number(GM_getValue(`${site}_dbg_limit`, DEBUG.DEFAULT_MAX_MB)); }catch(_e){}
+  dbgRefs.limit.value = dbgLimit;
+  dbgRefs.fetch.textContent = `Descargar y Demapear (≤${dbgLimit}MB)`;
+  const dbg = { findings: [], maps: [], sources: [] };
+  function fmtBytes(n){ if(n==null||isNaN(n)) return ''; const u=['B','KB','MB','GB']; let i=0; while(n>=1024&&i<u.length-1){ n/=1024; i++; } return n.toFixed(1)+u[i]; }
+  function dbgRender(){
+    if (dbgTabBtn) dbgTabBtn.textContent = `Source Maps / Debug Artefacts (${dbg.findings.length})`;
+    dbgRefs.results.innerHTML='';
+    dbg.findings.forEach(f=>{
+      const div=document.createElement('div'); div.className='ptk-row';
+      const st=f.status?` · ${f.status}`:'';
+      const sz=f.size?` · ${fmtBytes(f.size)}${f.truncated?' (truncado)':''}`:'';
+      div.innerHTML = `<div style="opacity:.8">${escHTML(f.url)}</div><div>${f.artefact}${st}${sz}</div>`;
+      dbgRefs.results.appendChild(div);
+    });
+  }
+  dbgRefs.limit.addEventListener('change',()=>{
+    dbgLimit = Number(dbgRefs.limit.value)||DEBUG.DEFAULT_MAX_MB;
+    dbgRefs.fetch.textContent = `Descargar y Demapear (≤${dbgLimit}MB)`;
+    try{ if (typeof GM_setValue === 'function') GM_setValue(`${site}_dbg_limit`, dbgLimit); }catch(_e){}
+  });
+  function dbgList(){
+    dbg.findings.length=0; dbg.maps.length=0; dbg.sources.length=0;
+    dbgRefs.results.innerHTML=''; dbgRender();
+    const resources=[...document.scripts,...document.querySelectorAll('link[rel="stylesheet"]')];
+    let pending=resources.length;
+    if(!pending){ dbgRefs.status.textContent='Listo'; return; }
+    dbgRefs.status.textContent='Buscando…';
+    const done=()=>{ if(--pending===0){ dbgRefs.status.textContent='Listo'; dbgRender(); } };
+    resources.forEach(el=>{
+      const url=el.src||el.href||''; if(!url){ done(); return; }
+      if(/\/_next\//.test(url)) dbg.findings.push({url,status:'',size:0,artefact:'_next/'});
+      if(/__webpack_hmr/.test(url)) dbg.findings.push({url,status:'',size:0,artefact:'__webpack_hmr'});
+      if(/@vite|\/vite\//.test(url)) dbg.findings.push({url,status:'',size:0,artefact:'vite'});
+      GM_xmlhttpRequest({method:'GET',url,timeout:DEBUG.TIMEOUT_MS,
+        onload:res=>{
+          const m=res.responseText.match(/[#@]\s*sourceMappingURL=([^\s\n]+)/);
+          if(m){
+            let mapUrl; try{ mapUrl=new URL(m[1],url).href; }catch(_e){ mapUrl=m[1]; }
+            const info={url:mapUrl,status:'?',size:0,artefact:'map'};
+            dbg.findings.push(info); dbg.maps.push(info);
+            GM_xmlhttpRequest({method:'HEAD',url:mapUrl,timeout:DEBUG.TIMEOUT_MS,
+              onload:r2=>{info.status=r2.status; const m2=(r2.responseHeaders||'').match(/content-length:\s*(\d+)/i); info.size=m2?Number(m2[1]):0; dbgRender(); done();},
+              onerror:()=>{info.status='error'; dbgRender(); done();},
+              ontimeout:()=>{info.status='timeout'; dbgRender(); done();}
+            });
+          } else done();
+        },
+        onerror:done,
+        ontimeout:done
+      });
+    });
+  }
+  function dbgFetch(){
+    if(!dbg.maps.length){ dbgRefs.status.textContent='No hay maps.'; return; }
+    const maxBytes=(Number(dbgRefs.limit.value)||DEBUG.DEFAULT_MAX_MB)*1024*1024;
+    dbg.sources.length=0;
+    let pending=dbg.maps.length;
+    dbgRefs.status.textContent='Descargando…';
+    dbg.maps.forEach(info=>{
+      GM_xmlhttpRequest({method:'GET',url:info.url,timeout:DEBUG.TIMEOUT_MS,
+        onload:res=>{
+          info.status=res.status;
+          try{
+            const bytes=typeof TextEncoder!=='undefined'?new TextEncoder().encode(res.responseText||'').length:(res.responseText||'').length;
+            info.size=bytes;
+            if(bytes>maxBytes){info.truncated=true;}else{
+              const sm=JSON.parse(res.responseText);
+              const base=info.url.replace(/[^/]+$/, '');
+              const sroot=sm.sourceRoot||'';
+              (sm.sources||[]).forEach((s,i)=>{
+                const content=sm.sourcesContent&&sm.sourcesContent[i];
+                if(typeof content==='string'){
+                  const abs=new URL(s, base+sroot).href;
+                  dbg.sources.push({file:abs, content});
+                }
+              });
+            }
+          }catch(e){logError(e);}
+          if(--pending===0){dbgRefs.status.textContent='Maps procesados'; dbgRender();}
+        },
+        onerror:()=>{info.status='error'; if(--pending===0){dbgRefs.status.textContent='Maps procesados'; dbgRender();}},
+        ontimeout:()=>{info.status='timeout'; if(--pending===0){dbgRefs.status.textContent='Maps procesados'; dbgRender();}}
+      });
+    });
+  }
+  function dbgRescan(){
+    if(!dbg.sources.length){ dbgRefs.status.textContent='Sin fuentes'; return; }
+    dbgRefs.status.textContent='Re-escaneando…';
+    dbg.sources.forEach(src=>{ try{ jsScanText(src.file, src.content); }catch(e){ logError(e); } });
+    jsRender();
+    dbgRefs.status.textContent='JS Hunter actualizado';
+  }
+  dbgRefs.list.onclick=dbgList;
+  dbgRefs.fetch.onclick=dbgFetch;
+  dbgRefs.rescan.onclick=dbgRescan;
+  dbgRefs.copy.onclick=()=>{ const out=JSON.stringify(dbg.findings,null,2); clip(out); dbgRefs.copy.textContent='¡Copiado!'; setTimeout(()=>dbgRefs.copy.textContent='Copiar JSON',1200); };
+  dbgRefs.csv.onclick=()=>{ const head=['url','status','size','artefact']; csvDownload(`debug_maps_${nowStr()}.csv`, head, dbg.findings.map(f=>({url:f.url,status:f.status,size:f.size,artefact:f.artefact}))); };
+
+  /* ============================
      VERSIONS (cola única, anti-stall; headers 1x/host; externos solo si referenciados)
   ============================ */
   const tabVers = panel.querySelector('#tab_security_versions');

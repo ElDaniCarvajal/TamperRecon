@@ -621,7 +621,7 @@ if (typeof window !== 'undefined') (function () {
         </div>
         <section id="tab_apis_openapi"></section>
         <section id="tab_apis_graphql" style="display:none"></section>
-        <section id="tab_apis_cors" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_cors" style="display:none"></section>
         <section id="tab_apis_ratelimit" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_apis_fuzzer" style="display:none"></section>
       </div>
@@ -2374,6 +2374,104 @@ rsRefs.pmToggle.onclick=()=>{
   gqlRefs.scan.onclick=gqlStart; gqlRefs.clear.onclick=gqlClear;
   gqlRefs.copy.onclick=()=>{ const out=JSON.stringify(gql.findings,null,2); clip(out); gqlRefs.copy.textContent='¡Copiado!'; setTimeout(()=>gqlRefs.copy.textContent='Copiar JSON',1200); };
   gqlRefs.csv.onclick=()=>{ const rows=[]; gql.findings.forEach(f=>f.types.forEach(t=>rows.push({url:f.url,type:t}))); const head=['url','type']; csvDownload(`graphql_types_${nowStr()}.csv`, head, rows); };
+
+  /* ============================
+     CORS Tester
+  ============================ */
+  const tabCORS = panel.querySelector('#tab_apis_cors');
+  const coTabBtn = panel.querySelector('#tabs_apis .ptk-tab[data-tab="cors"]');
+  tabCORS.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">CORS Tester</div>
+        <div class="ptk-grid">
+          <button id="co_run" class="ptk-btn">Probar</button>
+          <button id="co_clear" class="ptk-btn">Clear</button>
+          <button id="co_csv" class="ptk-btn">CSV</button>
+          <label><input type="checkbox" id="co_cred"> Incluir credenciales</label>
+          <label><input type="checkbox" id="co_safe" checked> Safe Mode</label>
+        </div>
+      </div>
+      <div class="ptk-row"><label>Endpoints<br><textarea id="co_targets" rows="3" style="width:100%"></textarea></label></div>
+      <div id="co_status" style="margin:6px 0">En espera…</div>
+      <div id="co_results"></div>
+    </div>
+  `;
+  const coRefs = {
+    run: tabCORS.querySelector('#co_run'),
+    clear: tabCORS.querySelector('#co_clear'),
+    csv: tabCORS.querySelector('#co_csv'),
+    cred: tabCORS.querySelector('#co_cred'),
+    safe: tabCORS.querySelector('#co_safe'),
+    targets: tabCORS.querySelector('#co_targets'),
+    status: tabCORS.querySelector('#co_status'),
+    results: tabCORS.querySelector('#co_results')
+  };
+  const CO = { TIMEOUT_MS:8000, MAX_CONCURRENCY:4, DELAY_MS:200 };
+  const co = { queue:[], findings:[], idx:0, inFlight:0, session:0 };
+  try{ if(typeof GM_getValue==='function') coRefs.targets.value=GM_getValue(`${site}_cors_targets`,''); }catch(_e){}
+  coRefs.targets.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_cors_targets`, coRefs.targets.value); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') coRefs.cred.checked=GM_getValue(`${site}_cors_cred`, false); }catch(_e){}
+  coRefs.cred.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_cors_cred`, coRefs.cred.checked); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') coRefs.safe.checked=GM_getValue(`${site}_cors_safe`, true); }catch(_e){}
+  coRefs.safe.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_cors_safe`, coRefs.safe.checked); }catch(_e){} };
+  try{ if(typeof GM_getValue==='function') co.findings=JSON.parse(GM_getValue(`${site}_cors`, '[]'))||[]; }catch(_e){}
+  co.findings.forEach(f=>coRender(f));
+  coUpdateCount();
+  function coUpdateCount(){ if(coTabBtn) coTabBtn.textContent=`CORS Tester (${co.findings.length})`; }
+  function coPersist(){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_cors`, JSON.stringify(co.findings)); }catch(_e){} }
+  function coRender(f){
+    const fam=family(f.status);
+    const risk=f.risk?' ⚠️':'';
+    const div=document.createElement('div');
+    div.className='ptk-row';
+    div.innerHTML=`<div><b>${f.method}</b> <span>${escHTML(f.origin)}</span> <a class="ptk-link" href="${f.url}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${f.url}</a>${risk}</div><div class="ptk-code" style="color:${famColor(fam)}">HTTP ${f.status} · ACAO=${escHTML(f.acao||'')} ACAC=${escHTML(f.acac||'')} Vary=${escHTML(f.vary||'')} ACAH=${escHTML(f.acah||'')} ACAM=${escHTML(f.acam||'')}</div>`;
+    coRefs.results.appendChild(div);
+  }
+  function coTargets(){
+    return unique(coRefs.targets.value.split(/\s+/).map(s=>s.trim()).filter(Boolean).map(p=>mkAbs(p)).filter(Boolean).filter(u=>!coRefs.safe.checked||sameOrigin(u)));
+  }
+  function coStart(){
+    const targets=coTargets();
+    if(!targets.length){ coRefs.status.textContent='Sin endpoints'; return; }
+    co.queue=[]; co.idx=0; co.inFlight=0; co.session++; co.findings.length=0; coRefs.results.innerHTML=''; coUpdateCount(); coPersist();
+    const rndSub=`https://${Math.random().toString(36).slice(2)}.${location.hostname}`;
+    targets.forEach(url=>{
+      ['OPTIONS','GET','HEAD'].forEach(method=>{
+        [
+          {label:'null',value:'null'},
+          {label:'sub',value:rndSub},
+          {label:'ext',value:'https://evil.example'},
+          {label:'same',value:location.origin}
+        ].forEach(o=>co.queue.push({url,method,origin:o}));
+      });
+    });
+    coRefs.status.textContent=`Probando ${co.queue.length} requests...`;
+    coPump();
+  }
+  function coAddFinding(rec){ co.findings.push(rec); coRender(rec); coUpdateCount(); coPersist(); }
+  function coPump(){
+    if(co.idx>=co.queue.length && co.inFlight===0){ coRefs.status.textContent=`Finalizado. Tests: ${co.queue.length}`; return; }
+    while(co.inFlight<CO.MAX_CONCURRENCY && co.idx<co.queue.length){
+      const q=co.queue[co.idx++]; const t0=performance.now(); co.inFlight++; coRefs.status.textContent=`${q.method} ${q.origin.label} ${q.url}`;
+      const headers={'Origin':q.origin.value}; if(q.method==='OPTIONS'){ headers['Access-Control-Request-Method']='POST'; }
+      GM_xmlhttpRequest({ method:q.method, url:q.url, timeout:CO.TIMEOUT_MS, withCredentials:coRefs.cred.checked, headers,
+        onload:res=>{
+          const hdr=res.responseHeaders||''; const grab=n=>{ const m=new RegExp('^'+n+':\s*([^\n]+)','im').exec(hdr); return m?m[1].trim():''; };
+          const acao=grab('access-control-allow-origin'); const acac=grab('access-control-allow-credentials');
+          const vary=grab('vary'); const acah=grab('access-control-allow-headers'); const acam=grab('access-control-allow-methods');
+          const risk=(acao==='*' && (coRefs.cred.checked || /true/i.test(acac))) || (acao && acao.toLowerCase()===q.origin.value.toLowerCase() && q.origin.value.toLowerCase()!==location.origin.toLowerCase());
+          coAddFinding({url:q.url,method:q.method,origin:q.origin.value,status:res.status,acao,acac,vary,acah,acam,risk});
+        },
+        onerror:()=>{ coAddFinding({url:q.url,method:q.method,origin:q.origin.value,status:'ERR',acao:'',acac:'',vary:'',acah:'',acam:'',risk:false}); },
+        ontimeout:()=>{ coAddFinding({url:q.url,method:q.method,origin:q.origin.value,status:'TIMEOUT',acao:'',acac:'',vary:'',acah:'',acam:'',risk:false}); },
+        onloadend:()=>{ co.inFlight--; setTimeout(coPump, CO.DELAY_MS); }
+      });
+    }
+  }
+  function coClear(){ co.queue=[]; co.findings.length=0; co.idx=0; co.inFlight=0; coRefs.results.innerHTML=''; coRefs.status.textContent='En espera…'; coUpdateCount(); coPersist(); }
+  coRefs.run.onclick=coStart; coRefs.clear.onclick=coClear;
+  coRefs.csv.onclick=()=>{ const head=['url','method','origin','status','acao','acac','vary','acah','acam','risk']; csvDownload(`cors_${nowStr()}.csv`, head, co.findings); };
 
   /* ============================
      API Fuzzer (sin cambios, CSV con file/line)

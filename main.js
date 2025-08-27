@@ -620,7 +620,7 @@ if (typeof window !== 'undefined') (function () {
           <div class="ptk-tab" data-tab="fuzzer">API Fuzzer (0)</div>
         </div>
         <section id="tab_apis_openapi"></section>
-        <section id="tab_apis_graphql" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_graphql" style="display:none"></section>
         <section id="tab_apis_cors" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_apis_ratelimit" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_apis_fuzzer" style="display:none"></section>
@@ -2254,6 +2254,126 @@ rsRefs.pmToggle.onclick=()=>{
   function oaStart(){ oa.queue=[]; oa.idx=0; oa.inFlight=0; oa.session++; oaRefs.results.innerHTML=''; oa.findings.length=0; oaUpdateCount(); oaPersist(); oaRefs.status.textContent='Buscando specs...'; oaFetchSpecs(()=>{ if(!oa.queue.length){ oaRefs.status.textContent='Sin specs válidos'; return; } oaRefs.status.textContent=`Probando ${oa.queue.length} requests...`; oaPump(); }); }
   function oaClear(){ oa.queue=[]; oa.findings.length=0; oa.idx=0; oa.inFlight=0; oaRefs.results.innerHTML=''; oaRefs.status.textContent='En espera…'; oaUpdateCount(); oaPersist(); }
   oaRefs.scan.onclick=oaStart; oaRefs.clear.onclick=oaClear; oaRefs.csv.onclick=()=>{ const head=['url','method','status','ms','headers']; csvDownload(`openapi_${nowStr()}.csv`, head, oa.findings); };
+
+  /* ============================
+     GraphQL discovery & introspection
+  ============================ */
+  const tabGQL = panel.querySelector('#tab_apis_graphql');
+  const gqlTabBtn = panel.querySelector('#tabs_apis .ptk-tab[data-tab="graphql"]');
+  tabGQL.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">GraphQL</div>
+        <div class="ptk-grid">
+          <button id="gql_scan" class="ptk-btn">Detectar + Probar</button>
+          <button id="gql_clear" class="ptk-btn">Clear</button>
+          <button id="gql_copy" class="ptk-btn">Copiar JSON</button>
+          <button id="gql_csv" class="ptk-btn">CSV</button>
+          <label><input type="checkbox" id="gql_introspect"> Permitir introspección</label>
+        </div>
+      </div>
+      <div id="gql_status" style="margin:6px 0">En espera…</div>
+      <div id="gql_results"></div>
+    </div>
+  `;
+  const gqlRefs = {
+    scan: tabGQL.querySelector('#gql_scan'),
+    clear: tabGQL.querySelector('#gql_clear'),
+    copy: tabGQL.querySelector('#gql_copy'),
+    csv: tabGQL.querySelector('#gql_csv'),
+    introspect: tabGQL.querySelector('#gql_introspect'),
+    status: tabGQL.querySelector('#gql_status'),
+    results: tabGQL.querySelector('#gql_results')
+  };
+  const GQL = { TIMEOUT_MS:8000 };
+  const gql = { findings:[] };
+  try{ if(typeof GM_getValue==='function') gql.findings=JSON.parse(GM_getValue(`${site}_graphql`, '[]'))||[]; }catch(_e){}
+  function gqlUpdateCount(){ if(gqlTabBtn) gqlTabBtn.textContent=`GraphQL (${gql.findings.length})`; }
+  function gqlPersist(){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_graphql`, JSON.stringify(gql.findings)); }catch(_e){} }
+  function gqlRender(){
+    gqlRefs.results.innerHTML='';
+    gql.findings.forEach(f=>{
+      const fam=family(f.status);
+      const flags=[];
+      if(f.introspectionEnabled) flags.push('introspectionEnabled');
+      if(f.unboundedPagination) flags.push('paginación sin tope');
+      const div=document.createElement('div'); div.className='ptk-row';
+      div.innerHTML=`<div><a class="ptk-link" href="${f.url}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${f.url}</a></div><div class="ptk-code" style="color:${famColor(fam)}">HTTP ${f.status}${flags.length?' · '+flags.join(', '):''}</div>`;
+      gqlRefs.results.appendChild(div);
+      if(f.queries.length || f.mutations.length || f.types.length){
+        const info=document.createElement('div'); info.className='ptk-row';
+        info.innerHTML=`<div class="ptk-code">Query: ${f.queries.join(', ')||'—'} | Mutation: ${f.mutations.join(', ')||'—'} | Types: ${f.types.slice(0,5).join(', ')||'—'}</div>`;
+        gqlRefs.results.appendChild(info);
+      }
+      if(f.samples && f.samples.length){
+        const pre=document.createElement('pre'); pre.className='ptk-code'; pre.textContent=f.samples.join('\n');
+        gqlRefs.results.appendChild(pre);
+      }
+    });
+    gqlUpdateCount();
+  }
+  gqlRender();
+  try{ if(typeof GM_getValue==='function') gqlRefs.introspect.checked=GM_getValue(`${site}_graphql_introspect`, false); }catch(_e){}
+  gqlRefs.introspect.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_graphql_introspect`, gqlRefs.introspect.checked); }catch(_e){} };
+  function gqlCandidates(){
+    const set=new Set();
+    try{
+      (globalThis.TRCore&&TRCore.records||[]).forEach(r=>{
+        if(!r||!r.url) return;
+        const base=r.url.split('?')[0];
+        if(/\/graphql/i.test(base)) set.add(base);
+        else if(r.response&&typeof r.response.body==='string'&&/"errors"\s*:\s*\[/i.test(r.response.body)) set.add(base);
+      });
+    }catch(_e){}
+    ['/graphql','/api/graphql','/v1/graphql','/v2/graphql'].forEach(p=>{ const u=mkAbs(p); if(u&&sameOrigin(u)) set.add(u); });
+    return Array.from(set);
+  }
+  const INTROSPECTION_QUERY=`query IntrospectionQuery{__schema{queryType{name} mutationType{name} types{name kind fields{name args{name defaultValue} type{kind name ofType{kind name ofType{kind name}}}}}}}`;
+  function parseIntrospection(data){
+    const schema=data.__schema||{};
+    const qName=schema.queryType&&schema.queryType.name;
+    const mName=schema.mutationType&&schema.mutationType.name;
+    const types=(schema.types||[]).map(t=>t.name).filter(Boolean);
+    const queries=[]; const mutations=[]; let unbounded=false; const samples=[];
+    function isList(t){ return t && (t.kind==='LIST' || (t.kind==='NON_NULL' && isList(t.ofType))); }
+    const findType=name=>(schema.types||[]).find(t=>t.name===name)||{};
+    const qType=findType(qName);
+    if(qType.fields){
+      qType.fields.forEach(f=>{
+        queries.push(f.name);
+        const list=isList(f.type);
+        if(list){ const hasLimit=(f.args||[]).some(a=>/limit|first|pageSize/i.test(a.name)); if(!hasLimit) unbounded=true; }
+      });
+      for(const f of qType.fields){ if(samples.length>=2) break; const args=f.args||[]; let arg=''; if(args.some(a=>/limit|first/i.test(a.name))) arg='(limit:1)'; else if(args.length) continue; samples.push(`{ ${f.name}${arg} { __typename } }`); }
+    }
+    const mType=findType(mName);
+    if(mType.fields) mutations.push(...mType.fields.map(f=>f.name));
+    return {queries, mutations, types, unbounded, samples};
+  }
+  function runIntrospection(url,finding){
+    GM_xmlhttpRequest({ method:'POST', url, timeout:GQL.TIMEOUT_MS, headers:{'Content-Type':'application/json','Accept':'application/json'}, data:JSON.stringify({query:INTROSPECTION_QUERY}), onload:res=>{
+      try{ const json=JSON.parse(res.responseText); if(json.data){ const p=parseIntrospection(json.data); Object.assign(finding,{introspectionEnabled:true,allowIntrospection:true,queries:p.queries,mutations:p.mutations,types:p.types,samples:p.samples,unboundedPagination:p.unbounded}); } }catch(_e){}
+      gqlRender(); gqlPersist();
+    }, onerror:()=>{ gqlRender(); gqlPersist(); }, ontimeout:()=>{ gqlRender(); gqlPersist(); } });
+  }
+  function gqlStart(){
+    gql.findings.length=0; gqlRender(); gqlPersist(); const cands=gqlCandidates(); if(!cands.length){ gqlRefs.status.textContent='Sin endpoints'; return; }
+    gqlRefs.status.textContent=`Probando ${cands.length} endpoints...`;
+    let pending=cands.length;
+    cands.forEach(url=>{
+      const qurl=url.includes('?')?url:url+`?query=${encodeURIComponent('{__typename}')}`;
+      GM_xmlhttpRequest({ method:'GET', url:qurl, timeout:GQL.TIMEOUT_MS, headers:{'Accept':'application/json'}, onload:res=>{
+        const body=res.responseText||''; const f={url, status:res.status, introspectionEnabled:false, allowIntrospection:false, queries:[], mutations:[], types:[], samples:[], unboundedPagination:false};
+        if(/"errors"\s*:\s*\[/i.test(body)) f.note='errors';
+        gql.findings.push(f);
+        if(gqlRefs.introspect.checked && res.status===200) runIntrospection(url,f);
+      }, onerror:()=>{ gql.findings.push({url,status:0,introspectionEnabled:false,allowIntrospection:false,queries:[],mutations:[],types:[],samples:[],unboundedPagination:false}); }, ontimeout:()=>{ gql.findings.push({url,status:0,introspectionEnabled:false,allowIntrospection:false,queries:[],mutations:[],types:[],samples:[],unboundedPagination:false}); }, onloadend:()=>{ if(--pending===0){ gqlRender(); gqlPersist(); gqlRefs.status.textContent=`Finalizado. Endpoints: ${cands.length}`; } } });
+    });
+  }
+  function gqlClear(){ gql.findings.length=0; gqlRender(); gqlPersist(); gqlRefs.status.textContent='En espera…'; }
+  gqlRefs.scan.onclick=gqlStart; gqlRefs.clear.onclick=gqlClear;
+  gqlRefs.copy.onclick=()=>{ const out=JSON.stringify(gql.findings,null,2); clip(out); gqlRefs.copy.textContent='¡Copiado!'; setTimeout(()=>gqlRefs.copy.textContent='Copiar JSON',1200); };
+  gqlRefs.csv.onclick=()=>{ const rows=[]; gql.findings.forEach(f=>f.types.forEach(t=>rows.push({url:f.url,type:t}))); const head=['url','type']; csvDownload(`graphql_types_${nowStr()}.csv`, head, rows); };
 
   /* ============================
      API Fuzzer (sin cambios, CSV con file/line)

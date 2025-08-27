@@ -3,6 +3,7 @@ const consoleLogKeys = new Set();
 let renderConsole = () => {};
 let renderCE = () => {};
 function addConsoleLog(level, args, extra){
+  if(!liveConsole) return;
   const msg = args.map(a => {
     try { return typeof a === 'string' ? a : JSON.stringify(a); }
     catch(_e){ return String(a); }
@@ -686,6 +687,10 @@ if (typeof window !== 'undefined') (function () {
     eventLogs.push(Object.assign({ time: new Date().toISOString(), type }, details));
   }
   function addRuntimeLog(rec){
+    if(!liveGlobals){
+      const t = rec.type || '';
+      if(t==='global' || t==='localStorage' || t==='sessionStorage' || t==='cookie') return;
+    }
     ringPush(runtimeLogs, rec);
     logEvent('runtime', rec);
     updateRuntimeBadge();
@@ -712,7 +717,7 @@ if (typeof window !== 'undefined') (function () {
     return out;
   }
   function addNetLog(rec){
-    if(netPaused) return;
+    if(netPaused || !liveNet) return;
     if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++netSeq;
     ringPush(netLogs, rec);
@@ -733,6 +738,7 @@ if (typeof window !== 'undefined') (function () {
   let cryptoRender = ()=>{};
   let cryptoSeq = 0;
   function addCodecLog(rec){
+    if(!liveCodec) return;
     if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++codecSeq;
     if(rec.inputPreview===undefined) rec.inputPreview = ebPreview(rec.input,100);
@@ -745,6 +751,7 @@ if (typeof window !== 'undefined') (function () {
     try{ codecRender(); }catch(_e){}
   }
   function addCryptoLog(rec){
+    if(!liveCrypto) return;
     if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++cryptoSeq;
     if(rec.keyPreview !== undefined) rec.keyPreview = redact(rec.keyPreview);
@@ -756,7 +763,7 @@ if (typeof window !== 'undefined') (function () {
     try{ cryptoRender(); }catch(_e){}
   }
   function addMsgLog(rec){
-    if(msgPaused) return;
+    if(msgPaused || !liveMsg) return;
     if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++msgSeq;
     ringPush(msgLogs, rec);
@@ -777,7 +784,21 @@ if (typeof window !== 'undefined') (function () {
     };
     addMsgLog(rec);
   }
-  try{ if(globalThis.TREventBus){ if(globalThis.TREventBuffers && globalThis.TREventBuffers.pm) globalThis.TREventBuffers.pm.all().forEach(handlePmEvent); globalThis.TREventBus.subscribe('pm:*', handlePmEvent); } }catch(_e){}
+  let pmSubId = 0;
+  function updatePmSubscription(){
+    try{
+      if(!globalThis.TREventBus) return;
+      if(liveMsg){
+        if(!pmSubId){
+          if(globalThis.TREventBuffers && globalThis.TREventBuffers.pm) globalThis.TREventBuffers.pm.all().forEach(handlePmEvent);
+          pmSubId = globalThis.TREventBus.subscribe('pm:*', handlePmEvent);
+        }
+      } else if(pmSubId){
+        globalThis.TREventBus.unsubscribe(pmSubId);
+        pmSubId = 0;
+      }
+    }catch(_e){}
+  }
 
   function handleCryptoEvent(ev){
     const type = (ev.type||'').split(':')[1] || '';
@@ -791,12 +812,21 @@ if (typeof window !== 'undefined') (function () {
       sample: ev.sample || ''
     });
   }
-  try{
-    if(globalThis.TREventBus){
-      if(globalThis.TREventBuffers && globalThis.TREventBuffers.crypto) globalThis.TREventBuffers.crypto.all().forEach(handleCryptoEvent);
-      globalThis.TREventBus.subscribe('crypto:*', handleCryptoEvent);
-    }
-  }catch(_e){}
+  let cryptoSubId = 0;
+  function updateCryptoSubscription(){
+    try{
+      if(!globalThis.TREventBus) return;
+      if(liveCrypto){
+        if(!cryptoSubId){
+          if(globalThis.TREventBuffers && globalThis.TREventBuffers.crypto) globalThis.TREventBuffers.crypto.all().forEach(handleCryptoEvent);
+          cryptoSubId = globalThis.TREventBus.subscribe('crypto:*', handleCryptoEvent);
+        }
+      } else if(cryptoSubId){
+        globalThis.TREventBus.unsubscribe(cryptoSubId);
+        cryptoSubId = 0;
+      }
+    }catch(_e){}
+  }
 
   const origFetch = window.fetch;
   if (origFetch) window.fetch = function(input, init){
@@ -906,6 +936,7 @@ if (typeof window !== 'undefined') (function () {
     .ptk-code{opacity:.95;word-break:break-all}
     .ptk-b64{background:#1f2937;cursor:help}
     .ptk-hex{background:#422006;cursor:help}
+    .ptk-chip{background:#1f2a44;border:1px solid #334155;border-radius:6px;padding:2px 4px;font-size:10px;opacity:.8;margin-left:4px}
     input[type="number"],input[type="text"],select{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:4px 6px}
     label{opacity:.95}
   `;
@@ -980,12 +1011,12 @@ if (typeof window !== 'undefined') (function () {
       </div>
       <div id="top_runtime" style="display:none">
         <div class="ptk-tabs" id="tabs_runtime">
-          <div class="ptk-tab active" data-tab="network">Network (0)</div>
-          <div class="ptk-tab" data-tab="messaging">Messaging (0)</div>
-          <div class="ptk-tab" data-tab="codecs">Codecs (0)</div>
-          <div class="ptk-tab" data-tab="crypto">Crypto (0)</div>
-          <div class="ptk-tab" data-tab="console">Console & Errors (0)</div>
-          <div class="ptk-tab" data-tab="globals">Globals/Vars (0)</div>
+          <div class="ptk-tab active" data-tab="network"><span class="ptk-label">Network (0)</span><span class="ptk-chip"></span></div>
+          <div class="ptk-tab" data-tab="messaging"><span class="ptk-label">Messaging (0)</span><span class="ptk-chip"></span></div>
+          <div class="ptk-tab" data-tab="codecs"><span class="ptk-label">Codecs (0)</span><span class="ptk-chip"></span></div>
+          <div class="ptk-tab" data-tab="crypto"><span class="ptk-label">Crypto (0)</span><span class="ptk-chip"></span></div>
+          <div class="ptk-tab" data-tab="console"><span class="ptk-label">Console & Errors (0)</span><span class="ptk-chip"></span></div>
+          <div class="ptk-tab" data-tab="globals"><span class="ptk-label">Globals/Vars (0)</span><span class="ptk-chip"></span></div>
         </div>
         <section id="tab_runtime_network"></section>
         <section id="tab_runtime_messaging" style="display:none">
@@ -1023,11 +1054,13 @@ if (typeof window !== 'undefined') (function () {
           <div class="ptk-tab" data-tab="hard">Hardening</div>
           <div class="ptk-tab" data-tab="console">Console</div>
           <div class="ptk-tab" data-tab="errors">Errors</div>
+          <div class="ptk-tab" data-tab="settings">Settings</div>
         </div>
         <section id="tab_buckets"></section>
         <section id="tab_hard" style="display:none"></section>
         <section id="tab_console" style="display:none"></section>
         <section id="tab_errors" style="display:none"></section>
+        <section id="tab_settings" style="display:none"></section>
       </div>
       `;
   root.appendChild(panel);
@@ -1067,6 +1100,17 @@ if (typeof window !== 'undefined') (function () {
     btnToggle.textContent = hide ? 'Ocultar' : 'Mostrar';
   };
   const site = location.hostname || 'global';
+  let liveNet = true, liveMsg = true, liveCodec = true, liveCrypto = true, liveConsole = true, liveGlobals = true;
+  try{
+    if(typeof GM_getValue==='function'){
+      liveNet = GM_getValue(`${site}_live_net`, true);
+      liveMsg = GM_getValue(`${site}_live_msg`, true);
+      liveCodec = GM_getValue(`${site}_live_codec`, true);
+      liveCrypto = GM_getValue(`${site}_live_crypto`, true);
+      liveConsole = GM_getValue(`${site}_live_console`, true);
+      liveGlobals = GM_getValue(`${site}_live_globals`, true);
+    }
+  }catch(_e){}
   function loadPins(key){
     try{ if(typeof GM_getValue==='function'){ const j=GM_getValue(`${site}_pin_${key}`,'[]'); return JSON.parse(j)||[]; } }catch(_e){}
     return [];
@@ -1132,27 +1176,48 @@ if (typeof window !== 'undefined') (function () {
     return show;
   }
 
-  initTabs('', ['buckets','hard','console','errors'], panel.querySelector('#top_report'));
+  initTabs('', ['buckets','hard','console','errors','settings'], panel.querySelector('#top_report'));
   initTabs('discover', ['files','js','crawler','debug'], panel.querySelector('#top_discover'));
   initTabs('apis', ['openapi','graphql','cors','ratelimit','fuzzer'], panel.querySelector('#top_apis'));
   initTabs('security', ['versions','cookies','tls','sw'], panel.querySelector('#top_security'));
   const showRuntimeTab = initTabs('runtime', ['network','messaging','codecs','crypto','console','globals'], panel.querySelector('#top_runtime'));
 
   const reportTabsEl = panel.querySelector('#tabs');
-  const runtimeNetTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="network"]');
-  const runtimeMsgTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="messaging"]');
-  const runtimeCodecTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="codecs"]');
-  const runtimeCryptoTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="crypto"]');
-  const runtimeConsoleTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="console"]');
+  const runtimeNetTab = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="network"]');
+  const runtimeMsgTab = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="messaging"]');
+  const runtimeCodecTab = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="codecs"]');
+  const runtimeCryptoTab = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="crypto"]');
+  const runtimeConsoleTab = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="console"]');
+  const runtimeGlobalsTab = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="globals"]');
+  const runtimeNetLabel = runtimeNetTab && runtimeNetTab.querySelector('.ptk-label');
+  const runtimeMsgLabel = runtimeMsgTab && runtimeMsgTab.querySelector('.ptk-label');
+  const runtimeCodecLabel = runtimeCodecTab && runtimeCodecTab.querySelector('.ptk-label');
+  const runtimeCryptoLabel = runtimeCryptoTab && runtimeCryptoTab.querySelector('.ptk-label');
+  const runtimeConsoleLabel = runtimeConsoleTab && runtimeConsoleTab.querySelector('.ptk-label');
+  const runtimeGlobalsLabel = runtimeGlobalsTab && runtimeGlobalsTab.querySelector('.ptk-label');
+  const runtimeNetChip = runtimeNetTab && runtimeNetTab.querySelector('.ptk-chip');
+  const runtimeMsgChip = runtimeMsgTab && runtimeMsgTab.querySelector('.ptk-chip');
+  const runtimeCodecChip = runtimeCodecTab && runtimeCodecTab.querySelector('.ptk-chip');
+  const runtimeCryptoChip = runtimeCryptoTab && runtimeCryptoTab.querySelector('.ptk-chip');
+  const runtimeConsoleChip = runtimeConsoleTab && runtimeConsoleTab.querySelector('.ptk-chip');
+  const runtimeGlobalsChip = runtimeGlobalsTab && runtimeGlobalsTab.querySelector('.ptk-chip');
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
-    if (runtimeNetTabBtn) runtimeNetTabBtn.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
-    if (runtimeMsgTabBtn) runtimeMsgTabBtn.textContent = `Messaging (${msgLogs.length})`;
-    if (runtimeCodecTabBtn) runtimeCodecTabBtn.textContent = `Codecs (${codecLogs.length})`;
-    if (runtimeCryptoTabBtn) runtimeCryptoTabBtn.textContent = `Crypto (${cryptoLogs.length})`;
-    if (runtimeConsoleTabBtn) runtimeConsoleTabBtn.textContent = `Console & Errors (${consoleLogs.length})`;
+    if (runtimeNetLabel) runtimeNetLabel.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
+    if (runtimeMsgLabel) runtimeMsgLabel.textContent = `Messaging (${msgLogs.length})`;
+    if (runtimeCodecLabel) runtimeCodecLabel.textContent = `Codecs (${codecLogs.length})`;
+    if (runtimeCryptoLabel) runtimeCryptoLabel.textContent = `Crypto (${cryptoLogs.length})`;
+    if (runtimeConsoleLabel) runtimeConsoleLabel.textContent = `Console & Errors (${consoleLogs.length})`;
   };
+  function updateLiveChips(){
+    if(runtimeNetChip) runtimeNetChip.textContent = liveNet ? 'LIVE' : 'OFF';
+    if(runtimeMsgChip) runtimeMsgChip.textContent = liveMsg ? 'LIVE' : 'OFF';
+    if(runtimeCodecChip) runtimeCodecChip.textContent = liveCodec ? 'LIVE' : 'OFF';
+    if(runtimeCryptoChip) runtimeCryptoChip.textContent = liveCrypto ? 'LIVE' : 'OFF';
+    if(runtimeConsoleChip) runtimeConsoleChip.textContent = liveConsole ? 'LIVE' : 'OFF';
+    if(runtimeGlobalsChip) runtimeGlobalsChip.textContent = liveGlobals ? 'LIVE' : 'OFF';
+  }
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
   }
@@ -1189,6 +1254,44 @@ if (typeof window !== 'undefined') (function () {
     updateErrorBadge();
   };
   renderErrors();
+  const tabSettings = panel.querySelector('#tab_settings');
+  tabSettings.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-hdr">Live Capture</div>
+      <div class="ptk-grid">
+        <label><input type="checkbox" id="live_net"> Network</label>
+        <label><input type="checkbox" id="live_msg"> Messaging</label>
+        <label><input type="checkbox" id="live_codec"> Codecs</label>
+        <label><input type="checkbox" id="live_crypto"> Crypto</label>
+        <label><input type="checkbox" id="live_console"> Console/Errors</label>
+        <label><input type="checkbox" id="live_globals"> Globals</label>
+      </div>
+    </div>
+  `;
+  const liveRefs = {
+    net: tabSettings.querySelector('#live_net'),
+    msg: tabSettings.querySelector('#live_msg'),
+    codec: tabSettings.querySelector('#live_codec'),
+    crypto: tabSettings.querySelector('#live_crypto'),
+    console: tabSettings.querySelector('#live_console'),
+    globals: tabSettings.querySelector('#live_globals')
+  };
+  liveRefs.net.checked = liveNet;
+  liveRefs.msg.checked = liveMsg;
+  liveRefs.codec.checked = liveCodec;
+  liveRefs.crypto.checked = liveCrypto;
+  liveRefs.console.checked = liveConsole;
+  liveRefs.globals.checked = liveGlobals;
+  function persistLive(key, val){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_live_${key}`, val); }catch(_e){} }
+  liveRefs.net.onchange = ()=>{ liveNet = liveRefs.net.checked; persistLive('net', liveNet); updateLiveChips(); };
+  liveRefs.msg.onchange = ()=>{ liveMsg = liveRefs.msg.checked; persistLive('msg', liveMsg); updatePmSubscription(); updateLiveChips(); };
+  liveRefs.codec.onchange = ()=>{ liveCodec = liveRefs.codec.checked; persistLive('codec', liveCodec); updateLiveChips(); };
+  liveRefs.crypto.onchange = ()=>{ liveCrypto = liveRefs.crypto.checked; persistLive('crypto', liveCrypto); updateCryptoSubscription(); updateLiveChips(); };
+  liveRefs.console.onchange = ()=>{ liveConsole = liveRefs.console.checked; persistLive('console', liveConsole); updateLiveChips(); };
+  liveRefs.globals.onchange = ()=>{ liveGlobals = liveRefs.globals.checked; persistLive('globals', liveGlobals); updateLiveChips(); };
+  updatePmSubscription();
+  updateCryptoSubscription();
+  updateLiveChips();
   runtimeNotify = function(){
     showTopTab('runtime');
     showRuntimeTab('network');
@@ -1691,7 +1794,7 @@ window.fetch = async function(...args){
   if (jsRefs.captureNet && jsRefs.captureNet.checked){
     try {
       const url = typeof args[0]==='string'? args[0] : (args[0] && args[0].url) || '';
-      logEvent('network', { method:'fetch', url });
+      if(liveNet) logEvent('network', { method:'fetch', url });
       const clone = res.clone();
       const hdrs = Array.from(clone.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n');
       withTimeout(clone.text(), JS.TIMEOUT_MS)
@@ -1709,7 +1812,7 @@ XMLHttpRequest.prototype.send = function(...args){
         const hdrs = this.getAllResponseHeaders();
         const body = this.responseText || '';
         const url = this.responseURL || '';
-        logEvent('network', { method:'xhr', url });
+        if(liveNet) logEvent('network', { method:'xhr', url });
         jsProcessCapture('xhr '+url,hdrs,body);
       } catch(e){ logError(e); }
     }

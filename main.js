@@ -1423,26 +1423,26 @@ if (typeof window !== 'undefined') (function () {
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
-    if (runtimeNetLabel) runtimeNetLabel.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
-    if (runtimeMsgLabel) runtimeMsgLabel.textContent = `Messaging (${msgLogs.length})`;
-    if (runtimeCodecLabel) runtimeCodecLabel.textContent = `Codecs (${codecLogs.length})`;
-    if (runtimeCryptoLabel) runtimeCryptoLabel.textContent = `Crypto (${cryptoLogs.length})`;
-    if (runtimeConsoleLabel) runtimeConsoleLabel.textContent = `Console & Errors (${consoleLogs.length})`;
-    if (runtimeGlobalsLabel) runtimeGlobalsLabel.textContent = `Globals/Vars (${globalsList.length})`;
+    if (runtimeNetLabel) runtimeNetLabel.textContent = `Network (${liveNet ? runtimeLogs.length + netLogs.length : 0})`;
+    if (runtimeMsgLabel) runtimeMsgLabel.textContent = `Messaging (${liveMsg ? msgLogs.length : 0})`;
+    if (runtimeCodecLabel) runtimeCodecLabel.textContent = `Codecs (${liveCodec ? codecLogs.length : 0})`;
+    if (runtimeCryptoLabel) runtimeCryptoLabel.textContent = `Crypto (${liveCrypto ? cryptoLogs.length : 0})`;
+    if (runtimeConsoleLabel) runtimeConsoleLabel.textContent = `Console & Errors (${liveConsole ? consoleLogs.length : 0})`;
+    if (runtimeGlobalsLabel) runtimeGlobalsLabel.textContent = `Globals/Vars (${liveGlobals ? globalsList.length : 0})`;
   };
   function updateLiveChips(){
-    if(runtimeNetChip) runtimeNetChip.textContent = liveNet ? 'LIVE' : 'OFF';
-    if(runtimeMsgChip) runtimeMsgChip.textContent = liveMsg ? 'LIVE' : 'OFF';
-    if(runtimeCodecChip) runtimeCodecChip.textContent = liveCodec ? 'LIVE' : 'OFF';
-    if(runtimeCryptoChip) runtimeCryptoChip.textContent = liveCrypto ? 'LIVE' : 'OFF';
-    if(runtimeConsoleChip) runtimeConsoleChip.textContent = liveConsole ? 'LIVE' : 'OFF';
-    if(runtimeGlobalsChip) runtimeGlobalsChip.textContent = liveGlobals ? 'LIVE' : 'OFF';
+    if(runtimeNetChip) runtimeNetChip.textContent = liveNet ? 'Live: ON' : 'Live: OFF';
+    if(runtimeMsgChip) runtimeMsgChip.textContent = liveMsg ? 'Live: ON' : 'Live: OFF';
+    if(runtimeCodecChip) runtimeCodecChip.textContent = liveCodec ? 'Live: ON' : 'Live: OFF';
+    if(runtimeCryptoChip) runtimeCryptoChip.textContent = liveCrypto ? 'Live: ON' : 'Live: OFF';
+    if(runtimeConsoleChip) runtimeConsoleChip.textContent = liveConsole ? 'Live: ON' : 'Live: OFF';
+    if(runtimeGlobalsChip) runtimeGlobalsChip.textContent = liveGlobals ? 'Live: ON' : 'Live: OFF';
   }
   function updateConsoleBadge(){
-    if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
+    if (consoleTabBtn) consoleTabBtn.textContent = `Console (${liveConsole ? consoleLogs.length : 0})`;
   }
   function updateErrorBadge(){
-    if (errorsTabBtn) errorsTabBtn.textContent = `Errors (${errorLog.length})`;
+    if (errorsTabBtn) errorsTabBtn.textContent = `Errors (${liveConsole ? errorLog.length : 0})`;
   }
   updateRuntimeBadge();
   updateConsoleBadge();
@@ -1503,18 +1503,21 @@ if (typeof window !== 'undefined') (function () {
   liveRefs.console.checked = liveConsole;
   liveRefs.globals.checked = liveGlobals;
   function persistLive(key, val){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_live_${key}`, val); }catch(_e){} }
-  liveRefs.net.onchange = ()=>{ liveNet = liveRefs.net.checked; persistLive('net', liveNet); updateNetSubscription(); updateLiveChips(); };
-  liveRefs.msg.onchange = ()=>{ liveMsg = liveRefs.msg.checked; persistLive('msg', liveMsg); updatePmSubscription(); updateLiveChips(); };
-  liveRefs.codec.onchange = ()=>{ liveCodec = liveRefs.codec.checked; persistLive('codec', liveCodec); updateCodecSubscription(); updateLiveChips(); };
-  liveRefs.crypto.onchange = ()=>{ liveCrypto = liveRefs.crypto.checked; persistLive('crypto', liveCrypto); updateCryptoSubscription(); updateLiveChips(); };
-  liveRefs.console.onchange = ()=>{ liveConsole = liveRefs.console.checked; persistLive('console', liveConsole); updateLiveChips(); };
-  liveRefs.globals.onchange = ()=>{ liveGlobals = liveRefs.globals.checked; persistLive('globals', liveGlobals); updateLiveChips(); updateGlobalsLoop(); };
+  liveRefs.net.onchange = ()=>{ liveNet = liveRefs.net.checked; persistLive('net', liveNet); updateNetSubscription(); updateLiveChips(); updateRuntimeBadge(); };
+  liveRefs.msg.onchange = ()=>{ liveMsg = liveRefs.msg.checked; persistLive('msg', liveMsg); updatePmSubscription(); updateLiveChips(); updateRuntimeBadge(); };
+  liveRefs.codec.onchange = ()=>{ liveCodec = liveRefs.codec.checked; persistLive('codec', liveCodec); updateCodecSubscription(); updateLiveChips(); updateRuntimeBadge(); };
+  liveRefs.crypto.onchange = ()=>{ liveCrypto = liveRefs.crypto.checked; persistLive('crypto', liveCrypto); updateCryptoSubscription(); updateLiveChips(); updateRuntimeBadge(); };
+  liveRefs.console.onchange = ()=>{ liveConsole = liveRefs.console.checked; persistLive('console', liveConsole); updateLiveChips(); updateRuntimeBadge(); updateConsoleBadge(); updateErrorBadge(); };
+  liveRefs.globals.onchange = ()=>{ liveGlobals = liveRefs.globals.checked; persistLive('globals', liveGlobals); updateLiveChips(); updateRuntimeBadge(); updateGlobalsLoop(); };
   updateNetSubscription();
   updatePmSubscription();
   updateCodecSubscription();
   updateCryptoSubscription();
   updateLiveChips();
   updateGlobalsLoop();
+  updateRuntimeBadge();
+  updateConsoleBadge();
+  updateErrorBadge();
   runtimeNotify = function(){
     showTopTab('runtime');
     showRuntimeTab('network');

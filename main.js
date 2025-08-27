@@ -608,6 +608,94 @@ if (typeof window !== 'undefined') (function () {
     if (typeof rsRender === 'function') rsRender();
     if (typeof runtimeNotify === 'function') runtimeNotify();
   }
+
+  const netLogs = [];
+  let netRender = ()=>{};
+  let netPaused = false;
+  let netSeq = 0;
+  function hostFromUrl(u){ try{ return new URL(u, location.href).host; }catch(_e){ return ''; } }
+  function headersObj(h){
+    const out={};
+    try{
+      if(h && typeof h.forEach==='function') h.forEach((v,k)=>out[k]=v);
+      else if(h && typeof h==='object') Object.entries(h).forEach(([k,v])=>out[k]=v);
+    }catch(_e){}
+    return out;
+  }
+  function parseXHRHeaders(str){
+    const out={};
+    try{ str.trim().split(/\r?\n/).forEach(line=>{ const i=line.indexOf(':'); if(i>0){ const k=line.slice(0,i).trim().toLowerCase(); const v=line.slice(i+1).trim(); out[k]=v; } }); }catch(_e){}
+    return out;
+  }
+  function addNetLog(rec){
+    if(netPaused) return;
+    rec.id = ++netSeq;
+    netLogs.push(rec);
+    logEvent('network', rec);
+    updateRuntimeBadge();
+    try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:'network', data:rec, ts:Date.now() }); }catch(_e){}
+    try{ netRender(); }catch(_e){}
+  }
+
+  const origFetch = window.fetch;
+  if (origFetch) window.fetch = function(input, init){
+    if(netPaused) return origFetch.call(this, input, init);
+    const start=performance.now();
+    const ts=Date.now();
+    const url=typeof input==='string'?input:(input&&input.url);
+    const method=(init&&init.method)||(input&&input.method)||'GET';
+    const reqHeaders=headersObj((init&&init.headers)||(input&&input.headers));
+    let reqBody=init&&init.body;
+    if(typeof reqBody==='string') reqBody=truncateBytes(reqBody);
+    return origFetch.call(this,input,init).then(resp=>{
+      const rec={ts,type:'fetch',method,url,host:hostFromUrl(url),status:resp.status,ms:Math.round(performance.now()-start),size:0,reqHeaders,reqBody};
+      try{ rec.resHeaders=headersObj(resp.headers); }catch(_e){}
+      return resp.clone().arrayBuffer().then(buf=>{
+        rec.size=buf.byteLength;
+        try{ rec.resBody=truncateBytes(new TextDecoder().decode(buf)); }catch(_e){}
+        addNetLog(rec); return resp; });
+    }).catch(err=>{ addNetLog({ts,type:'fetch',method,url,host:hostFromUrl(url),status:0,ms:Math.round(performance.now()-start),size:0,reqHeaders,reqBody,error:String(err)}); throw err; });
+  };
+
+  const OrigXHR = window.XMLHttpRequest;
+  window.XMLHttpRequest = function(){
+    const xhr = new OrigXHR();
+    let url='', method='GET', start=0, ts=0; const reqHeaders={}; let reqBody;
+    const finalize=()=>{
+      if(netPaused) return;
+      const rec={ts,type:'xhr',method,url,host:hostFromUrl(url),status:xhr.status,ms:Math.round(performance.now()-start),size:(xhr.response? (xhr.response.length||0):0),reqHeaders,reqBody};
+      try{ rec.resHeaders=parseXHRHeaders(xhr.getAllResponseHeaders()); }catch(_e){}
+      try{ rec.resBody=truncateBytes(xhr.responseText); }catch(_e){}
+      addNetLog(rec);
+    };
+    xhr.addEventListener('loadend', finalize);
+    const origOpen=xhr.open; xhr.open=function(m,u,a){ method=m; url=u; return origOpen.call(xhr,m,u,a); };
+    const origSend=xhr.send; xhr.send=function(body){ if(netPaused) return origSend.call(xhr, body); start=performance.now(); ts=Date.now(); reqBody=truncateBytes(body); return origSend.call(xhr, body); };
+    const origSetRequestHeader=xhr.setRequestHeader; xhr.setRequestHeader=function(k,v){ reqHeaders[k]=v; return origSetRequestHeader.call(xhr,k,v); };
+    return xhr;
+  };
+
+  const OrigWS = window.WebSocket;
+  window.WebSocket = new Proxy(OrigWS, {
+    construct(target, args){
+      const ws = new target(...args);
+      const url = args[0];
+      const host = hostFromUrl(url);
+      ws.addEventListener('message', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'recv',url,host,status:0,ms:0,size:(ev.data&&ev.data.length)||0,resBody:truncateBytes(String(ev.data))}); });
+      ws.addEventListener('close', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'close',url,host,status:ev.code,ms:0,size:0}); });
+      const s = ws.send; ws.send=function(data){ if(!netPaused) addNetLog({ts:Date.now(),type:'ws',method:'send',url,host,status:0,ms:0,size:(data&&data.length)||0,reqBody:truncateBytes(String(data))}); return s.call(ws,data); };
+      return ws;
+    }
+  });
+
+  const OrigES = window.EventSource;
+  window.EventSource = function(url, cfg){
+    const es = new OrigES(url, cfg);
+    const host = hostFromUrl(url);
+    es.addEventListener('message', ev=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'sse',method:ev.type||'message',url,host,status:0,ms:0,size:(ev.data&&ev.data.length)||0,resBody:truncateBytes(String(ev.data))}); });
+    es.addEventListener('error', ()=>{ if(!netPaused) addNetLog({ts:Date.now(),type:'sse',method:'error',url,host,status:0,ms:0,size:0}); });
+    return es;
+  };
   const origEval = window.eval;
   window.eval = function(str){
     if (typeof str === 'string') addRuntimeLog({ type:'eval', code:str });
@@ -845,7 +933,7 @@ if (typeof window !== 'undefined') (function () {
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
-    if (runtimeTabBtn) runtimeTabBtn.textContent = `Network (${runtimeLogs.length})`;
+    if (runtimeTabBtn) runtimeTabBtn.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
   };
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
@@ -1520,10 +1608,21 @@ jsRefs.copy.onclick=()=>{ const current=jh.findings.filter(f=>f.session===jh.ses
 jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session).map(r=>({file:r.file,line: (typeof r.line==='number'?(r.line+1):''),type:r.type,value:r.value,host:r.host||''})); const head=['file','line','type','value','host']; csvDownload(`js_hunter_${nowStr()}.csv`, head, rows); };
 
 /* ============================
-   Runtime Secrets
+   Runtime Network
 ============================ */
 const tabRuntime = panel.querySelector('#tab_runtime_network');
 tabRuntime.innerHTML = `
+  <div class="ptk-tabs" id="tabs_runtime_network_inner">
+    <div class="ptk-tab active" data-tab="secrets">Secrets</div>
+    <div class="ptk-tab" data-tab="network">Network</div>
+  </div>
+  <section id="tab_runtime_network_secrets"></section>
+  <section id="tab_runtime_network_network" style="display:none"></section>
+`;
+initTabs('runtime_network', ['secrets','network'], tabRuntime);
+
+const tabSecrets = tabRuntime.querySelector('#tab_runtime_network_secrets');
+tabSecrets.innerHTML = `
   <div class="ptk-box">
     <div class="ptk-flex">
       <div class="ptk-hdr">Runtime Secrets</div>
@@ -1538,11 +1637,11 @@ tabRuntime.innerHTML = `
   </div>
 `;
 const rsRefs = {
-  clear: tabRuntime.querySelector('#rs_clear'),
-  copy:  tabRuntime.querySelector('#rs_copy'),
-  dl:    tabRuntime.querySelector('#rs_dl'),
-  pmToggle: tabRuntime.querySelector('#rs_pm_toggle'),
-  results: tabRuntime.querySelector('#rs_results')
+  clear: tabSecrets.querySelector('#rs_clear'),
+  copy:  tabSecrets.querySelector('#rs_copy'),
+  dl:    tabSecrets.querySelector('#rs_dl'),
+  pmToggle: tabSecrets.querySelector('#rs_pm_toggle'),
+  results: tabSecrets.querySelector('#rs_results')
 };
 rsRefs.pmToggle.textContent = capturePostMessage ? 'Pausar postMessage' : 'Reanudar postMessage';
 rsRender = function(){
@@ -1577,6 +1676,86 @@ rsRefs.pmToggle.onclick=()=>{
   capturePostMessage = !capturePostMessage;
   rsRefs.pmToggle.textContent = capturePostMessage ? 'Pausar postMessage' : 'Reanudar postMessage';
 };
+
+const tabNet = tabRuntime.querySelector('#tab_runtime_network_network');
+tabNet.innerHTML = `
+  <div class="ptk-box">
+    <div class="ptk-flex">
+      <div class="ptk-hdr">Network</div>
+      <div class="ptk-grid">
+        <input id="net_txt" class="ptk-input" placeholder="Texto" style="width:80px">
+        <input id="net_host" class="ptk-input" placeholder="Host" style="width:80px">
+        <input id="net_method" class="ptk-input" placeholder="Método/tipo" style="width:100px">
+        <input id="net_status" class="ptk-input" placeholder="Status" style="width:60px">
+        <button id="net_pause" class="ptk-btn">Pausar</button>
+        <button id="net_clear" class="ptk-btn">Clear</button>
+        <button id="net_json" class="ptk-btn">JSON</button>
+        <button id="net_csv" class="ptk-btn">CSV</button>
+      </div>
+    </div>
+    <div style="max-height:200px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th>ts</th><th>tipo</th><th>método/evt</th><th>url</th><th>status</th><th>ms</th><th>size</th><th>acciones</th></tr></thead>
+        <tbody id="net_rows"></tbody>
+      </table>
+    </div>
+  </div>
+  <div id="net_details" class="ptk-box" style="display:none"></div>
+`;
+const netRefs={
+  txt:tabNet.querySelector('#net_txt'),
+  host:tabNet.querySelector('#net_host'),
+  method:tabNet.querySelector('#net_method'),
+  status:tabNet.querySelector('#net_status'),
+  pause:tabNet.querySelector('#net_pause'),
+  clear:tabNet.querySelector('#net_clear'),
+  json:tabNet.querySelector('#net_json'),
+  csv:tabNet.querySelector('#net_csv'),
+  rows:tabNet.querySelector('#net_rows'),
+  details:tabNet.querySelector('#net_details')
+};
+function highlightUrl(u){
+  try{ const x=new URL(u, location.href); const h=escHTML(x.host); return escHTML(u).replace(h, `<span style="color:#93c5fd">${h}</span>`); }catch(_e){ return escHTML(u); }
+}
+function netFiltered(){
+  const t=netRefs.txt.value.toLowerCase();
+  const h=netRefs.host.value.toLowerCase();
+  const m=netRefs.method.value.toLowerCase();
+  const s=netRefs.status.value.trim();
+  return netLogs.filter(r=>{
+    if(t && !r.url.toLowerCase().includes(t)) return false;
+    if(h && !(r.host||'').toLowerCase().includes(h)) return false;
+    if(m && !((r.method||'').toLowerCase().includes(m) || r.type.toLowerCase().includes(m))) return false;
+    if(s){ const parts=s.split('-'); const st=Number(r.status||0); if(parts[0] && st<Number(parts[0])) return false; if(parts[1] && st>Number(parts[1])) return false; }
+    return true;
+  });
+}
+netRender = function(){
+  const list=netFiltered();
+  netRefs.rows.innerHTML='';
+  if(!list.length){ netRefs.rows.innerHTML='<tr><td colspan="8">Sin datos</td></tr>'; return; }
+  list.forEach(rec=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.type)}</td><td>${escHTML(rec.method||'')}</td><td>${highlightUrl(rec.url)}</td><td>${rec.status||''}</td><td>${rec.ms||''}</td><td>${rec.size||''}</td><td><button class="ptk-btn net_copy" data-id="${rec.id}">Copy</button> <button class="ptk-btn net_det" data-id="${rec.id}">Details</button></td>`;
+    netRefs.rows.appendChild(tr);
+  });
+  netRefs.rows.querySelectorAll('.net_copy').forEach(btn=>{
+    btn.onclick=()=>{ const rec=netLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(JSON.stringify(rec,null,2)); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='Copy',1200); } };
+  });
+  netRefs.rows.querySelectorAll('.net_det').forEach(btn=>{
+    btn.onclick=()=>{ const rec=netLogs.find(r=>r.id==btn.dataset.id); if(!rec) return; let html=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.method||rec.type)} ${escHTML(rec.url)}</div><button id="net_det_close" class="ptk-btn">Cerrar</button></div>`; if(rec.reqHeaders){ html+=`<div><b>Request Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.reqHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.reqBody){ html+=`<div><b>Request Body</b><pre class="ptk-code">${escHTML(rec.reqBody)}</pre></div>`; } if(rec.resHeaders){ html+=`<div><b>Response Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.resHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.resBody){ html+=`<div><b>Response Body</b><pre class="ptk-code">${escHTML(rec.resBody)}</pre></div>`; } netRefs.details.innerHTML=html; netRefs.details.style.display=''; netRefs.details.querySelector('#net_det_close').onclick=()=>{ netRefs.details.style.display='none'; }; };
+  });
+};
+netRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_txt`, netRefs.txt.value); }catch(_e){}; netRender(); };
+netRefs.host.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_host`, netRefs.host.value); }catch(_e){}; netRender(); };
+netRefs.method.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_method`, netRefs.method.value); }catch(_e){}; netRender(); };
+netRefs.status.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_status`, netRefs.status.value); }catch(_e){}; netRender(); };
+netRefs.clear.onclick=()=>{ netLogs.length=0; netRender(); updateRuntimeBadge(); };
+netRefs.pause.onclick=()=>{ netPaused=!netPaused; netRefs.pause.textContent=netPaused?'Reanudar':'Pausar'; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_paused`, netPaused); }catch(_e){}; };
+netRefs.json.onclick=()=>{ const out=JSON.stringify(netFiltered(),null,2); clip(out); netRefs.json.textContent='¡Copiado!'; setTimeout(()=>netRefs.json.textContent='JSON',1200); };
+netRefs.csv.onclick=()=>{ const head=['ts','type','method','url','status','ms','size']; const rows=netFiltered().map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,method:r.method,url:r.url,status:r.status,ms:r.ms,size:r.size})); csvDownload(`network_${nowStr()}.csv`, head, rows); };
+try{ if(typeof GM_getValue==='function'){ netRefs.txt.value=GM_getValue(`${site}_net_txt`, ''); netRefs.host.value=GM_getValue(`${site}_net_host`, ''); netRefs.method.value=GM_getValue(`${site}_net_method`, ''); netRefs.status.value=GM_getValue(`${site}_net_status`, ''); netPaused=GM_getValue(`${site}_net_paused`, false); netRefs.pause.textContent=netPaused?'Reanudar':'Pausar'; } }catch(_e){}
+netRender();
 
 { // Global variables/functions viewer
   try {

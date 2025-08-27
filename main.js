@@ -507,6 +507,17 @@ if (typeof window !== 'undefined') (function () {
   function ebIsJWT(str){
     return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(str||'');
   }
+  function ebToString(val){
+    try{
+      if(val==null) return '';
+      if(typeof val==='string') return val;
+      if(ArrayBuffer.isView(val) || val instanceof ArrayBuffer){
+        const arr = val instanceof ArrayBuffer ? new Uint8Array(val) : val;
+        return Array.from(arr).join(',');
+      }
+      return JSON.stringify(val);
+    }catch(_e){ try{ return String(val); }catch(__e){ return ''; } }
+  }
 
   // Event schemas:
   // net:fetch/xhr {type,phase,method,url,status,ok,ms,reqHeaders,resHeaders,reqBody,resBody,ts}
@@ -652,6 +663,20 @@ if (typeof window !== 'undefined') (function () {
   let msgRender = ()=>{};
   let msgPaused = false;
   let msgSeq = 0;
+  const codecLogs = [];
+  let codecRender = ()=>{};
+  let codecSeq = 0;
+  function addCodecLog(rec){
+    rec.id = ++codecSeq;
+    if(rec.inputPreview===undefined) rec.inputPreview = ebPreview(rec.input,100);
+    if(rec.outputPreview===undefined) rec.outputPreview = ebPreview(rec.output,100);
+    if(rec.inputFull===undefined) rec.inputFull = ebToString(rec.input);
+    if(rec.outputFull===undefined) rec.outputFull = ebToString(rec.output);
+    codecLogs.push(rec);
+    logEvent('codec', rec);
+    updateRuntimeBadge();
+    try{ codecRender(); }catch(_e){}
+  }
   function addMsgLog(rec){
     if(msgPaused) return;
     rec.id = ++msgSeq;
@@ -888,7 +913,7 @@ if (typeof window !== 'undefined') (function () {
             </div>
           </div>
         </section>
-        <section id="tab_runtime_codecs" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_codecs" style="display:none"></section>
         <section id="tab_runtime_crypto" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_runtime_console" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_runtime_globals" style="display:none"><div class="ptk-row">Placeholder</div></section>
@@ -943,6 +968,13 @@ if (typeof window !== 'undefined') (function () {
     btnToggle.textContent = hide ? 'Ocultar' : 'Mostrar';
   };
   const site = location.hostname || 'global';
+  const codecCfg = { btoa:false, text:false };
+  try{
+    if(typeof GM_getValue==='function'){
+      codecCfg.btoa = GM_getValue(`${site}_codec_btoa`, false);
+      codecCfg.text = GM_getValue(`${site}_codec_text`, false);
+    }
+  }catch(_e){}
   const topTabsEl = panel.querySelector('#top_tabs');
   function showTopTab(name){
     ['discover','apis','security','runtime','report'].forEach(t=>{
@@ -991,11 +1023,13 @@ if (typeof window !== 'undefined') (function () {
   const reportTabsEl = panel.querySelector('#tabs');
   const runtimeNetTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="network"]');
   const runtimeMsgTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="messaging"]');
+  const runtimeCodecTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="codecs"]');
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
     if (runtimeNetTabBtn) runtimeNetTabBtn.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
     if (runtimeMsgTabBtn) runtimeMsgTabBtn.textContent = `Messaging (${msgLogs.length})`;
+    if (runtimeCodecTabBtn) runtimeCodecTabBtn.textContent = `Codecs (${codecLogs.length})`;
   };
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
@@ -1864,6 +1898,63 @@ msgRefs.json.onclick=()=>{ const out=JSON.stringify(msgFiltered(),null,2); clip(
 msgRefs.csv.onclick=()=>{ const head=['ts','channel','type','origin','target','size','preview']; const rows=msgFiltered().map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); csvDownload(`messaging_${nowStr()}.csv`, head, rows); };
 try{ if(typeof GM_getValue==='function'){ msgRefs.txt.value=GM_getValue(`${site}_msg_txt`, ''); msgRefs.channel.value=GM_getValue(`${site}_msg_channel`, ''); msgRefs.origin.value=GM_getValue(`${site}_msg_origin`, ''); msgRefs.target.value=GM_getValue(`${site}_msg_target`, ''); msgPaused=GM_getValue(`${site}_msg_paused`, false); msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; } }catch(_e){}
 msgRender();
+updateRuntimeBadge();
+
+/* ============================
+   Runtime Codecs
+============================ */
+const tabCodecs = panel.querySelector('#tab_runtime_codecs');
+tabCodecs.innerHTML = `
+  <div class="ptk-box">
+    <div class="ptk-flex">
+      <div class="ptk-hdr">Codecs</div>
+      <div class="ptk-grid">
+        <label><input type="checkbox" id="cd_btoa"> btoa</label>
+        <label><input type="checkbox" id="cd_text"> TextEncoder/Decoder</label>
+        <button id="cd_clear" class="ptk-btn">Clear</button>
+        <button id="cd_json" class="ptk-btn">JSON</button>
+        <button id="cd_csv" class="ptk-btn">CSV</button>
+      </div>
+    </div>
+    <div style="max-height:200px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th>ts</th><th>codec</th><th>len</th><th>JSON</th><th>JWT</th><th>input</th><th>output</th><th>acciones</th></tr></thead>
+        <tbody id="cd_rows"></tbody>
+      </table>
+    </div>
+  </div>
+`;
+const cdRefs = {
+  btoa: tabCodecs.querySelector('#cd_btoa'),
+  text: tabCodecs.querySelector('#cd_text'),
+  clear: tabCodecs.querySelector('#cd_clear'),
+  json: tabCodecs.querySelector('#cd_json'),
+  csv: tabCodecs.querySelector('#cd_csv'),
+  rows: tabCodecs.querySelector('#cd_rows')
+};
+cdRefs.btoa.checked = codecCfg.btoa;
+cdRefs.text.checked = codecCfg.text;
+cdRefs.btoa.onchange=()=>{ codecCfg.btoa=cdRefs.btoa.checked; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_codec_btoa`, codecCfg.btoa); }catch(_e){}; };
+cdRefs.text.onchange=()=>{ codecCfg.text=cdRefs.text.checked; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_codec_text`, codecCfg.text); }catch(_e){}; };
+codecRender = function(){
+  cdRefs.rows.innerHTML='';
+  if(!codecLogs.length){ cdRefs.rows.innerHTML='<tr><td colspan="8">Sin datos</td></tr>'; return; }
+  codecLogs.forEach(rec=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.codec)}</td><td>${rec.length}</td><td>${rec.isJSON}</td><td>${rec.isJWT}</td><td>${escHTML(rec.inputPreview)}</td><td>${escHTML(rec.outputPreview)}</td><td><button class="ptk-btn cd_in" data-id="${rec.id}">In</button> <button class="ptk-btn cd_out" data-id="${rec.id}">Out</button></td>`;
+    cdRefs.rows.appendChild(tr);
+  });
+  cdRefs.rows.querySelectorAll('.cd_in').forEach(btn=>{
+    btn.onclick=()=>{ const rec=codecLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(rec.inputFull); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='In',1200); } };
+  });
+  cdRefs.rows.querySelectorAll('.cd_out').forEach(btn=>{
+    btn.onclick=()=>{ const rec=codecLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(rec.outputFull); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='Out',1200); } };
+  });
+};
+cdRefs.clear.onclick=()=>{ codecLogs.length=0; codecRender(); updateRuntimeBadge(); };
+cdRefs.json.onclick=()=>{ const out=JSON.stringify(codecLogs,null,2); clip(out); cdRefs.json.textContent='¡Copiado!'; setTimeout(()=>cdRefs.json.textContent='JSON',1200); };
+cdRefs.csv.onclick=()=>{ const head=['ts','codec','length','isJSON','isJWT','input','output']; const rows=codecLogs.map(r=>({ts:new Date(r.ts).toISOString(),codec:r.codec,length:r.length,isJSON:r.isJSON,isJWT:r.isJWT,input:r.inputFull,output:r.outputFull})); csvDownload(`codecs_${nowStr()}.csv`, head, rows); };
+codecRender();
 updateRuntimeBadge();
 
 { // Global variables/functions viewer
@@ -4207,7 +4298,24 @@ updateRuntimeBadge();
     global.atob = function(str){
       logActivity('atob', str);
       const out = origAtob.call(this, str);
-      TREventBus.emit({ type:'codec:atob', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts:Date.now() });
+      const ts = Date.now();
+      addCodecLog({ codec:'atob', input:str, output:out, length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
+      TREventBus.emit({ type:'codec:atob', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts });
+      return out;
+    };
+  }
+
+  // btoa
+  if (global.btoa){
+    const origBtoa = global.btoa;
+    global.btoa = function(str){
+      logActivity('btoa', str);
+      const out = origBtoa.call(this, str);
+      if (codecCfg.btoa){
+        const ts = Date.now();
+        addCodecLog({ codec:'btoa', input:str, output:out, length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts, inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), inputFull:ebToString(str), outputFull:ebToString(out) });
+        TREventBus.emit({ type:'codec:btoa', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(str), isJWT:ebIsJWT(str), ts });
+      }
       return out;
     };
   }
@@ -4221,10 +4329,34 @@ updateRuntimeBadge();
       td.decode = function(...dargs){
         const res = origDecode.apply(td, dargs);
         logActivity('textdecoder', res);
-        TREventBus.emit({ type:'codec:decode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts:Date.now() });
+        if (codecCfg.text){
+          const ts = Date.now();
+          addCodecLog({ codec:'textdecoder', input:dargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts, inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(dargs[0]), outputFull:ebToString(res) });
+          TREventBus.emit({ type:'codec:decode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts });
+        }
         return res;
       };
       return td;
+    };
+  }
+
+  // TextEncoder
+  if (global.TextEncoder){
+    const OrigTE = global.TextEncoder;
+    global.TextEncoder = function(...args){
+      const te = new OrigTE(...args);
+      const origEncode = te.encode;
+      te.encode = function(...eargs){
+        const res = origEncode.apply(te, eargs);
+        logActivity('textencoder', eargs[0]);
+        if (codecCfg.text){
+          const ts = Date.now();
+          addCodecLog({ codec:'textencoder', input:eargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts, inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(eargs[0]), outputFull:ebToString(res) });
+          TREventBus.emit({ type:'codec:encode', inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts });
+        }
+        return res;
+      };
+      return te;
     };
   }
 

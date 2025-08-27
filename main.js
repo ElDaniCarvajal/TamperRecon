@@ -56,7 +56,7 @@ if (typeof window !== 'undefined' && window.addEventListener){
       try{ r.__trLogged = true; }catch(_e){}
     } else msg = String(r);
     try{ addConsoleLog('error', [msg], { stack }); }catch(_e){}
-    try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:promise', message:msg, stack, ts: Date.now() }); }catch(_e){}
+    try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:js', message:msg, stack, ts: Date.now() }); }catch(_e){}
   });
 }
 
@@ -582,7 +582,7 @@ if (typeof window !== 'undefined') (function () {
   // net:fetch/xhr {type,phase,method,url,status,ok,ms,reqHeaders,resHeaders,reqBody,resBody,ts}
   // ws:* {type,url,data,code?,reason?,ts}
   // sse:message {type,url,event,data,ts}
-  // pm:* {type,origin?,target?,channel?,data,ts}
+  // pm:* {type,phase,origin?,target?,channel?,data,ts}
   // codec:* {type,inputPreview,outputPreview,length,isJSON?,isJWT?,ts}
   // crypto:* {type,alg?,keyPreview?,ivPreview?,length?,sample?,ts}
   // console:*/error:js {type,message,stack?,source?,line?,col?,ts}
@@ -725,7 +725,7 @@ if (typeof window !== 'undefined') (function () {
     ringPush(netLogs, rec);
     logEvent('network', rec);
     updateRuntimeBadge();
-    try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:'network', data:rec, ts:Date.now() }); }catch(_e){}
+    try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:'net:log', data:rec, ts:Date.now() }); }catch(_e){}
     try{ netRender(); }catch(_e){}
   }
 
@@ -774,11 +774,11 @@ if (typeof window !== 'undefined') (function () {
     try{ msgRender(); }catch(_e){}
   }
   function handlePmEvent(ev){
-    const type = (ev.type||'').split(':')[1] || '';
+    const base = (ev.type||'').split(':')[1] || '';
     const rec = {
       ts: ev.ts || Date.now(),
       channel: ev.channel || 'postMessage',
-      type,
+      type: ev.phase ? `${base}:${ev.phase}` : base,
       origin: ev.origin || '',
       target: ev.target || '',
       size: ev.size || 0,
@@ -803,7 +803,7 @@ if (typeof window !== 'undefined') (function () {
   }
 
   function handleCryptoEvent(ev){
-    const type = (ev.type||'').split(':')[1] || '';
+    const type = (ev.type||'').split(':').slice(1).join(':') || '';
     addCryptoLog({
       ts: ev.ts || Date.now(),
       type,
@@ -2378,7 +2378,7 @@ updateRuntimeBadge();
               const ivStr = cfg && cfg.iv && cfg.iv.toString ? cfg.iv.toString() : (cfg && cfg.iv ? String(cfg.iv) : '');
               const dataStr = data && data.toString ? data.toString() : String(data);
               addRuntimeLog({ type:'AES.'+fnName, key:keyStr, iv:ivStr, data:dataStr });
-              try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:`crypto:aes.${fnName}`, alg:'AES', keyPreview:redact(ebPreview(keyStr,80)), ivPreview:redact(ebPreview(ivStr,80)), length:dataStr.length||0, sample:redact(ebPreview(dataStr,80)), ts:Date.now() }); }catch(_e){}
+              try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:`crypto:aes:${fnName}`, alg:'AES', keyPreview:redact(ebPreview(keyStr,80)), ivPreview:redact(ebPreview(ivStr,80)), length:dataStr.length||0, sample:redact(ebPreview(dataStr,80)), ts:Date.now() }); }catch(_e){}
             }catch(e){ logError(e); }
             return orig.apply(this, arguments);
           };
@@ -4626,7 +4626,7 @@ updateRuntimeBadge();
       if (!XMLHttpRequest.prototype.open[WRAP_FLAG]){
         XMLHttpRequest.prototype.open = function(method, url, ...rest){
           this.__tr_url = url; this.__tr_method = method; this.__tr_start = Date.now();
-          TREventBus.emit({ type:'net:xhr', phase:'start', method, url, status:0, ok:false, ms:0, reqHeaders:{}, resHeaders:{}, reqBody:'', resBody:'', ts:this.__tr_start });
+          TREventBus.emit({ type:'net:xhr', phase:'open', method, url, status:0, ok:false, ms:0, reqHeaders:{}, resHeaders:{}, reqBody:'', resBody:'', ts:this.__tr_start });
           logActivity('xhr-open', method + ' ' + url);
           return origOpen.call(this, method, url, ...rest);
         };
@@ -4637,10 +4637,11 @@ updateRuntimeBadge();
         XMLHttpRequest.prototype.send = function(body){
           this.__tr_body = body;
           const xhr = this;
+          TREventBus.emit({ type:'net:xhr', phase:'send', method:xhr.__tr_method || '', url:xhr.__tr_url || '', status:0, ok:false, ms:0, reqHeaders:{}, resHeaders:{}, reqBody:ebPreview(body), resBody:'', ts:Date.now() });
           xhr.addEventListener('loadend', function(){
             const ms = Date.now() - (xhr.__tr_start || Date.now());
             const resHeaders = ebParseHeaders(xhr.getAllResponseHeaders ? xhr.getAllResponseHeaders() : '');
-            TREventBus.emit({ type:'net:xhr', phase:'end', method:xhr.__tr_method || '', url:xhr.__tr_url || '', status:xhr.status, ok:(xhr.status>=200 && xhr.status<300), ms, reqHeaders:{}, resHeaders, reqBody:ebPreview(xhr.__tr_body), resBody:ebPreview(xhr.response), ts:Date.now() });
+            TREventBus.emit({ type:'net:xhr', phase:'load', method:xhr.__tr_method || '', url:xhr.__tr_url || '', status:xhr.status, ok:(xhr.status>=200 && xhr.status<300), ms, reqHeaders:{}, resHeaders, reqBody:ebPreview(xhr.__tr_body), resBody:ebPreview(xhr.response), ts:Date.now() });
           });
           logActivity('xhr-send', this.__tr_url || '');
           return origSend.call(this, body);
@@ -4699,7 +4700,7 @@ updateRuntimeBadge();
       const origPostMessage = global.postMessage;
       const wrappedPost = function(msg, target, transfer){
         try{
-          TREventBus.emit({ type:'pm:post', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:ebPreview(msg), ts:Date.now() });
+          TREventBus.emit({ type:'pm:postMessage', phase:'send', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:ebPreview(msg), ts:Date.now() });
         }catch(_e){}
         try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
         return origPostMessage.call(this, msg, target, transfer);
@@ -4709,7 +4710,7 @@ updateRuntimeBadge();
       global.postMessage = wrappedPost;
       if (global.addEventListener){
         global.addEventListener('message', ev=>{
-          try{ TREventBus.emit({ type:'pm:message', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+          try{ TREventBus.emit({ type:'pm:postMessage', phase:'receive', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
         });
       }
     }
@@ -4720,15 +4721,15 @@ updateRuntimeBadge();
       const WrappedBC = function(name){
         logActivity('broadcastchannel', name);
         const bc = new OrigBC(name);
-        TREventBus.emit({ type:'pm:bc-open', channel:name, origin:(location && location.origin)||'', target:name, size:0, data:null, ts:Date.now() });
+        TREventBus.emit({ type:'pm:broadcast', phase:'open', channel:name, origin:(location && location.origin)||'', target:name, size:0, data:null, ts:Date.now() });
         const origBCPost = bc.postMessage;
         bc.postMessage = function(msg){
-          try{ TREventBus.emit({ type:'pm:bc-post', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
+          try{ TREventBus.emit({ type:'pm:broadcast', phase:'send', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
           try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
           return origBCPost.call(bc, msg);
         };
         bc.addEventListener('message', ev=>{
-          try{ TREventBus.emit({ type:'pm:bc-msg', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+          try{ TREventBus.emit({ type:'pm:broadcast', phase:'receive', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
           try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); }
         });
         return bc;
@@ -4791,7 +4792,7 @@ updateRuntimeBadge();
           if (codecCfg.text){
             const ts = Date.now();
             addCodecLog({ codec:'textdecoder', input:dargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts, inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(dargs[0]), outputFull:ebToString(res) });
-            TREventBus.emit({ type:'codec:decode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts });
+            TREventBus.emit({ type:'codec:textdecode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts });
           }
           return res;
         };
@@ -4814,7 +4815,7 @@ updateRuntimeBadge();
           if (codecCfg.text){
             const ts = Date.now();
             addCodecLog({ codec:'textencoder', input:eargs[0], output:res, length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts, inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), inputFull:ebToString(eargs[0]), outputFull:ebToString(res) });
-            TREventBus.emit({ type:'codec:encode', inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts });
+            TREventBus.emit({ type:'codec:textencode', inputPreview:ebPreview(eargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(eargs[0]), isJWT:ebIsJWT(eargs[0]), ts });
           }
           return res;
         };
@@ -4839,7 +4840,7 @@ updateRuntimeBadge();
             let iv = '';
             try{ sample = ebPreview(new Uint8Array(res).slice(0,16)); }catch(_e){}
             try{ if(alg && alg.iv) iv = ebPreview(new Uint8Array(alg.iv).slice(0,16)); }catch(_e){}
-            try{ TREventBus.emit({ type:`crypto:${op}`, alg: (alg && alg.name)||String(alg), ivPreview:redact(iv), length: len, sample:redact(sample), ts:Date.now() }); }catch(_e){}
+            try{ TREventBus.emit({ type:`crypto:subtle:${op}`, alg: (alg && alg.name)||String(alg), ivPreview:redact(iv), length: len, sample:redact(sample), ts:Date.now() }); }catch(_e){}
             return res;
           };
           s[op][WRAP_FLAG] = true;
@@ -4851,7 +4852,7 @@ updateRuntimeBadge();
         s.exportKey = async function(format, key){
           const res = await origExportKey(format, key);
           let len = res && (res.byteLength || res.length) || 0;
-          try{ TREventBus.emit({ type:'crypto:exportKey', alg:format, length:len, sample:redact(ebPreview(res,80)), ts:Date.now() }); }catch(_e){}
+          try{ TREventBus.emit({ type:'crypto:subtle:exportKey', alg:format, length:len, sample:redact(ebPreview(res,80)), ts:Date.now() }); }catch(_e){}
           logActivity('exportKey', format);
           return res;
         };

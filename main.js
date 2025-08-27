@@ -28,7 +28,7 @@ function addConsoleLog(level, args, extra){
   if (consoleLogKeys.has(key)) return;
   consoleLogKeys.add(key);
   const rec = { id: Date.now().toString(36)+Math.random().toString(36).slice(2), ts: Date.now(), time: new Date().toISOString(), level, message: msg, stack, source, line, col };
-  consoleLogs.push(rec);
+  ringPush(consoleLogs, rec);
   try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:`console:${level}`, message: msg, stack, source, line, col, ts: rec.ts }); }catch(_e){}
   try { renderConsole(); } catch(_e){}
   try { renderCE(); } catch(_e){}
@@ -469,6 +469,28 @@ if (typeof window !== 'undefined') (function () {
   function saveJSON(obj, filename){
     textDownload(filename, JSON.stringify(obj, null, 2));
   }
+  function ringPush(arr, item, max = 2000){
+    arr.push(item);
+    if (arr.length > max) arr.splice(0, arr.length - max);
+  }
+  function rowsToMarkdown(rows, cols){
+    if (!rows.length) return '';
+    const head = `|${cols.join('|')}|`;
+    const sep = `|${cols.map(()=> '---').join('|')}|`;
+    const body = rows.map(r => '|' + cols.map(c => String(r[c]||'').replace(/\|/g,'\\|')).join('|') + '|').join('\n');
+    return head + '\n' + sep + '\n' + body;
+  }
+  function renderChunked(list, container, rowFn, emptyHtml){
+    container.innerHTML='';
+    if(!list.length){ if(emptyHtml) container.innerHTML=emptyHtml; return; }
+    let i=0;
+    function step(){
+      const end=Math.min(i+50,list.length);
+      for(; i<end; i++) container.appendChild(rowFn(list[i], i));
+      if(i<list.length) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
   function makeRingBuffer(name, max = 2000){
     const host = (typeof location !== 'undefined' && location.hostname) ? location.hostname : 'global';
     const key = `rb_${host}_${name||'default'}`;
@@ -574,6 +596,8 @@ if (typeof window !== 'undefined') (function () {
       crypto: makeRingBuffer('crypto',2000),
       console:makeRingBuffer('console',2000)
     };
+    let evtCount=0, lastTick=0, sampling=false, sampleCount=0;
+    const SAMPLE_THRESHOLD=200;
     function match(pat, type){
       if (pat === '*' ) return true;
       if (pat.endsWith('*')) return type.startsWith(pat.slice(0,-1));
@@ -581,6 +605,10 @@ if (typeof window !== 'undefined') (function () {
     }
     function emit(ev){
       try{ ev.ts = ev.ts || Date.now(); }catch(_e){}
+      const now=Date.now();
+      if(now-lastTick>1000){ lastTick=now; evtCount=0; sampleCount=0; sampling=false; }
+      evtCount++;
+      if(evtCount>SAMPLE_THRESHOLD){ sampling=true; sampleCount++; if(sampleCount%5!==0) return; }
       const root = (ev.type||'').split(':')[0];
       const buf = buffers[root];
       if (buf) buf.push(ev);
@@ -592,7 +620,7 @@ if (typeof window !== 'undefined') (function () {
     function unsubscribe(id){
       const i = subs.findIndex(s=>s.id===id); if (i>=0) subs.splice(i,1);
     }
-    return { emit, subscribe, unsubscribe, buffers };
+    return { emit, subscribe, unsubscribe, buffers, get sampling(){ return sampling; } };
   })();
   globalThis.TREventBus = TREventBus;
   globalThis.TREventBuffers = TREventBus.buffers;
@@ -658,7 +686,7 @@ if (typeof window !== 'undefined') (function () {
     eventLogs.push(Object.assign({ time: new Date().toISOString(), type }, details));
   }
   function addRuntimeLog(rec){
-    runtimeLogs.push(rec);
+    ringPush(runtimeLogs, rec);
     logEvent('runtime', rec);
     updateRuntimeBadge();
     if (typeof rsRender === 'function') rsRender();
@@ -685,8 +713,9 @@ if (typeof window !== 'undefined') (function () {
   }
   function addNetLog(rec){
     if(netPaused) return;
+    if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++netSeq;
-    netLogs.push(rec);
+    ringPush(netLogs, rec);
     logEvent('network', rec);
     updateRuntimeBadge();
     try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:'network', data:rec, ts:Date.now() }); }catch(_e){}
@@ -704,30 +733,33 @@ if (typeof window !== 'undefined') (function () {
   let cryptoRender = ()=>{};
   let cryptoSeq = 0;
   function addCodecLog(rec){
+    if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++codecSeq;
     if(rec.inputPreview===undefined) rec.inputPreview = ebPreview(rec.input,100);
     if(rec.outputPreview===undefined) rec.outputPreview = ebPreview(rec.output,100);
     if(rec.inputFull===undefined) rec.inputFull = ebToString(rec.input);
     if(rec.outputFull===undefined) rec.outputFull = ebToString(rec.output);
-    codecLogs.push(rec);
+    ringPush(codecLogs, rec);
     logEvent('codec', rec);
     updateRuntimeBadge();
     try{ codecRender(); }catch(_e){}
   }
   function addCryptoLog(rec){
+    if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++cryptoSeq;
     if(rec.keyPreview !== undefined) rec.keyPreview = redact(rec.keyPreview);
     if(rec.ivPreview !== undefined) rec.ivPreview = redact(rec.ivPreview);
     if(rec.sample !== undefined) rec.sample = redact(rec.sample);
-    cryptoLogs.push(rec);
+    ringPush(cryptoLogs, rec);
     logEvent('crypto', rec);
     updateRuntimeBadge();
     try{ cryptoRender(); }catch(_e){}
   }
   function addMsgLog(rec){
     if(msgPaused) return;
+    if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
     rec.id = ++msgSeq;
-    msgLogs.push(rec);
+    ringPush(msgLogs, rec);
     logEvent('messaging', rec);
     updateRuntimeBadge();
     try{ msgRender(); }catch(_e){}
@@ -969,11 +1001,12 @@ if (typeof window !== 'undefined') (function () {
                 <button id="msg_clear" class="ptk-btn">Clear</button>
                 <button id="msg_json" class="ptk-btn">JSON</button>
                 <button id="msg_csv" class="ptk-btn">CSV</button>
+                <button id="msg_md" class="ptk-btn">Pinned MD</button>
               </div>
             </div>
             <div style="max-height:200px;overflow:auto">
               <table style="width:100%;border-collapse:collapse">
-                <thead><tr><th>ts</th><th>canal/tipo</th><th>origin</th><th>target</th><th>size</th><th>preview</th></tr></thead>
+                <thead><tr><th>ts</th><th>canal/tipo</th><th>origin</th><th>target</th><th>size</th><th>preview</th><th>acciones</th></tr></thead>
                 <tbody id="msg_rows"></tbody>
               </table>
             </div>
@@ -1034,6 +1067,25 @@ if (typeof window !== 'undefined') (function () {
     btnToggle.textContent = hide ? 'Ocultar' : 'Mostrar';
   };
   const site = location.hostname || 'global';
+  function loadPins(key){
+    try{ if(typeof GM_getValue==='function'){ const j=GM_getValue(`${site}_pin_${key}`,'[]'); return JSON.parse(j)||[]; } }catch(_e){}
+    return [];
+  }
+  function savePins(key, arr){
+    try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_pin_${key}`, JSON.stringify(arr)); }catch(_e){}
+  }
+  function isPinned(list, rec){ return list.some(r=>r.id===rec.id); }
+  function togglePin(list, rec, btn, key){
+    const idx=list.findIndex(r=>r.id===rec.id);
+    if(idx>=0){ list.splice(idx,1); btn.textContent='Pin'; }
+    else { list.push(rec); if(list.length>2000) list.splice(0,list.length-2000); btn.textContent='Unpin'; }
+    savePins(key, list);
+  }
+  const netPins = loadPins('net');
+  const msgPins = loadPins('msg');
+  const cdPins = loadPins('codec');
+  const cryptoPins = loadPins('crypto');
+  const cePins = loadPins('console');
   const codecCfg = { btoa:false, text:false };
   try{
     if(typeof GM_getValue==='function'){
@@ -1857,6 +1909,8 @@ tabNet.innerHTML = `
         <button id="net_clear" class="ptk-btn">Clear</button>
         <button id="net_json" class="ptk-btn">JSON</button>
         <button id="net_csv" class="ptk-btn">CSV</button>
+        <button id="net_md" class="ptk-btn">Pinned MD</button>
+        <span id="net_sampling" style="color:#f87171;display:none">sampling ON</span>
       </div>
     </div>
     <div style="max-height:200px;overflow:auto">
@@ -1866,7 +1920,7 @@ tabNet.innerHTML = `
       </table>
     </div>
   </div>
-  <div id="net_details" class="ptk-box" style="display:none"></div>
+  <div id="net_det" class="ptk-box" style="display:none"></div>
 `;
 const netRefs={
   txt:tabNet.querySelector('#net_txt'),
@@ -1877,8 +1931,10 @@ const netRefs={
   clear:tabNet.querySelector('#net_clear'),
   json:tabNet.querySelector('#net_json'),
   csv:tabNet.querySelector('#net_csv'),
+  md:tabNet.querySelector('#net_md'),
+  sampling:tabNet.querySelector('#net_sampling'),
   rows:tabNet.querySelector('#net_rows'),
-  details:tabNet.querySelector('#net_details')
+  details:tabNet.querySelector('#net_det')
 };
 function highlightUrl(u){
   try{ const x=new URL(u, location.href); const h=escHTML(x.host); return escHTML(u).replace(h, `<span style="color:#93c5fd">${h}</span>`); }catch(_e){ return escHTML(u); }
@@ -1898,19 +1954,19 @@ function netFiltered(){
 }
 netRender = function(){
   const list=netFiltered();
-  netRefs.rows.innerHTML='';
-  if(!list.length){ netRefs.rows.innerHTML='<tr><td colspan="8">Sin datos</td></tr>'; return; }
-  list.forEach(rec=>{
+  renderChunked(list, netRefs.rows, rec=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.type)}</td><td>${escHTML(rec.method||'')}</td><td>${highlightUrl(rec.url)}</td><td>${rec.status||''}</td><td>${rec.ms||''}</td><td>${rec.size||''}</td><td><button class="ptk-btn net_copy" data-id="${rec.id}">Copy</button> <button class="ptk-btn net_det" data-id="${rec.id}">Details</button></td>`;
-    netRefs.rows.appendChild(tr);
-  });
-  netRefs.rows.querySelectorAll('.net_copy').forEach(btn=>{
-    btn.onclick=()=>{ const rec=netLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(JSON.stringify(rec,null,2)); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='Copy',1200); } };
-  });
-  netRefs.rows.querySelectorAll('.net_det').forEach(btn=>{
-    btn.onclick=()=>{ const rec=netLogs.find(r=>r.id==btn.dataset.id); if(!rec) return; let html=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.method||rec.type)} ${escHTML(rec.url)}</div><button id="net_det_close" class="ptk-btn">Cerrar</button></div>`; if(rec.reqHeaders){ html+=`<div><b>Request Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.reqHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.reqBody){ html+=`<div><b>Request Body</b><pre class="ptk-code">${escHTML(rec.reqBody)}</pre></div>`; } if(rec.resHeaders){ html+=`<div><b>Response Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.resHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.resBody){ html+=`<div><b>Response Body</b><pre class="ptk-code">${escHTML(rec.resBody)}</pre></div>`; } netRefs.details.innerHTML=html; netRefs.details.style.display=''; netRefs.details.querySelector('#net_det_close').onclick=()=>{ netRefs.details.style.display='none'; }; };
-  });
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.type)}</td><td>${escHTML(rec.method||'')}</td><td>${highlightUrl(rec.url)}</td><td>${rec.status||''}</td><td>${rec.ms||''}</td><td>${rec.size||''}</td><td></td>`;
+    const actions=tr.lastElementChild;
+    const copy=document.createElement('button'); copy.className='ptk-btn'; copy.textContent='Copy';
+    copy.onclick=()=>{ clip(JSON.stringify(rec,null,2)); copy.textContent='¡Copiado!'; setTimeout(()=>copy.textContent='Copy',1200); };
+    const det=document.createElement('button'); det.className='ptk-btn'; det.textContent='Details';
+    det.onclick=()=>{ let html=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.method||rec.type)} ${escHTML(rec.url)}</div><button id="net_det_close" class="ptk-btn">Cerrar</button></div>`; if(rec.reqHeaders){ html+=`<div><b>Request Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.reqHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.reqBody){ html+=`<div><b>Request Body</b><pre class="ptk-code">${escHTML(rec.reqBody)}</pre></div>`; } if(rec.resHeaders){ html+=`<div><b>Response Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.resHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.resBody){ html+=`<div><b>Response Body</b><pre class="ptk-code">${escHTML(rec.resBody)}</pre></div>`; } netRefs.details.innerHTML=html; netRefs.details.style.display=''; netRefs.details.querySelector('#net_det_close').onclick=()=>{ netRefs.details.style.display='none'; }; };
+    const pin=document.createElement('button'); pin.className='ptk-btn'; pin.textContent=isPinned(netPins,rec)?'Unpin':'Pin';
+    pin.onclick=()=>togglePin(netPins,rec,pin,'net');
+    actions.appendChild(copy); actions.appendChild(det); actions.appendChild(pin);
+    return tr;
+  }, '<tr><td colspan="8">Sin datos</td></tr>');
 };
 netRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_txt`, netRefs.txt.value); }catch(_e){}; netRender(); };
 netRefs.host.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_host`, netRefs.host.value); }catch(_e){}; netRender(); };
@@ -1920,8 +1976,11 @@ netRefs.clear.onclick=()=>{ netLogs.length=0; netRender(); updateRuntimeBadge();
 netRefs.pause.onclick=()=>{ netPaused=!netPaused; netRefs.pause.textContent=netPaused?'Reanudar':'Pausar'; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_paused`, netPaused); }catch(_e){}; };
 netRefs.json.onclick=()=>{ const out=JSON.stringify(netFiltered(),null,2); clip(out); netRefs.json.textContent='¡Copiado!'; setTimeout(()=>netRefs.json.textContent='JSON',1200); };
 netRefs.csv.onclick=()=>{ const head=['ts','type','method','url','status','ms','size']; const rows=netFiltered().map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,method:r.method,url:r.url,status:r.status,ms:r.ms,size:r.size})); csvDownload(`network_${nowStr()}.csv`, head, rows); };
+netRefs.md.onclick=()=>{ const cols=['ts','type','method','url','status','ms','size']; const rows=netPins.map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,method:r.method,url:r.url,status:r.status,ms:r.ms,size:r.size})); clip(rowsToMarkdown(rows,cols)); netRefs.md.textContent='¡Copiado!'; setTimeout(()=>netRefs.md.textContent='Pinned MD',1200); };
 try{ if(typeof GM_getValue==='function'){ netRefs.txt.value=GM_getValue(`${site}_net_txt`, ''); netRefs.host.value=GM_getValue(`${site}_net_host`, ''); netRefs.method.value=GM_getValue(`${site}_net_method`, ''); netRefs.status.value=GM_getValue(`${site}_net_status`, ''); netPaused=GM_getValue(`${site}_net_paused`, false); netRefs.pause.textContent=netPaused?'Reanudar':'Pausar'; } }catch(_e){}
 netRender();
+function netSamplingLoop(){ netRefs.sampling.style.display = (globalThis.TREventBus && globalThis.TREventBus.sampling)?'':'none'; requestAnimationFrame(netSamplingLoop); }
+netSamplingLoop();
 
 const tabMessaging = panel.querySelector('#tab_runtime_messaging');
 const msgRefs = {
@@ -1933,6 +1992,7 @@ const msgRefs = {
   clear: tabMessaging.querySelector('#msg_clear'),
   json: tabMessaging.querySelector('#msg_json'),
   csv: tabMessaging.querySelector('#msg_csv'),
+  md: tabMessaging.querySelector('#msg_md'),
   rows: tabMessaging.querySelector('#msg_rows')
 };
 function msgFiltered(){
@@ -1950,13 +2010,15 @@ function msgFiltered(){
 }
 msgRender = function(){
   const list=msgFiltered();
-  msgRefs.rows.innerHTML='';
-  if(!list.length){ msgRefs.rows.innerHTML='<tr><td colspan="6">Sin datos</td></tr>'; return; }
-  list.forEach(rec=>{
+  renderChunked(list, msgRefs.rows, rec=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.channel+'/'+rec.type)}</td><td>${escHTML(rec.origin)}</td><td>${escHTML(rec.target)}</td><td>${rec.size}</td><td>${escHTML(rec.preview)}</td>`;
-    msgRefs.rows.appendChild(tr);
-  });
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.channel+'/'+rec.type)}</td><td>${escHTML(rec.origin)}</td><td>${escHTML(rec.target)}</td><td>${rec.size}</td><td>${escHTML(rec.preview)}</td><td></td>`;
+    const actions=tr.lastElementChild;
+    const pin=document.createElement('button'); pin.className='ptk-btn'; pin.textContent=isPinned(msgPins,rec)?'Unpin':'Pin';
+    pin.onclick=()=>togglePin(msgPins,rec,pin,'msg');
+    actions.appendChild(pin);
+    return tr;
+  }, '<tr><td colspan="7">Sin datos</td></tr>');
 };
 msgRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_txt`, msgRefs.txt.value); }catch(_e){}; msgRender(); };
 msgRefs.channel.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_channel`, msgRefs.channel.value); }catch(_e){}; msgRender(); };
@@ -1966,6 +2028,7 @@ msgRefs.clear.onclick=()=>{ msgLogs.length=0; msgRender(); updateRuntimeBadge();
 msgRefs.pause.onclick=()=>{ msgPaused=!msgPaused; msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_paused`, msgPaused); }catch(_e){}; };
 msgRefs.json.onclick=()=>{ const out=JSON.stringify(msgFiltered(),null,2); clip(out); msgRefs.json.textContent='¡Copiado!'; setTimeout(()=>msgRefs.json.textContent='JSON',1200); };
 msgRefs.csv.onclick=()=>{ const head=['ts','channel','type','origin','target','size','preview']; const rows=msgFiltered().map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); csvDownload(`messaging_${nowStr()}.csv`, head, rows); };
+msgRefs.md.onclick=()=>{ const cols=['ts','channel','type','origin','target','size','preview']; const rows=msgPins.map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); clip(rowsToMarkdown(rows,cols)); msgRefs.md.textContent='¡Copiado!'; setTimeout(()=>msgRefs.md.textContent='Pinned MD',1200); };
 try{ if(typeof GM_getValue==='function'){ msgRefs.txt.value=GM_getValue(`${site}_msg_txt`, ''); msgRefs.channel.value=GM_getValue(`${site}_msg_channel`, ''); msgRefs.origin.value=GM_getValue(`${site}_msg_origin`, ''); msgRefs.target.value=GM_getValue(`${site}_msg_target`, ''); msgPaused=GM_getValue(`${site}_msg_paused`, false); msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; } }catch(_e){}
 msgRender();
 updateRuntimeBadge();
@@ -1984,6 +2047,7 @@ tabCodecs.innerHTML = `
         <button id="cd_clear" class="ptk-btn">Clear</button>
         <button id="cd_json" class="ptk-btn">JSON</button>
         <button id="cd_csv" class="ptk-btn">CSV</button>
+        <button id="cd_md" class="ptk-btn">Pinned MD</button>
       </div>
     </div>
     <div style="max-height:200px;overflow:auto">
@@ -2000,6 +2064,7 @@ const cdRefs = {
   clear: tabCodecs.querySelector('#cd_clear'),
   json: tabCodecs.querySelector('#cd_json'),
   csv: tabCodecs.querySelector('#cd_csv'),
+  md: tabCodecs.querySelector('#cd_md'),
   rows: tabCodecs.querySelector('#cd_rows')
 };
 cdRefs.btoa.checked = codecCfg.btoa;
@@ -2007,23 +2072,24 @@ cdRefs.text.checked = codecCfg.text;
 cdRefs.btoa.onchange=()=>{ codecCfg.btoa=cdRefs.btoa.checked; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_codec_btoa`, codecCfg.btoa); }catch(_e){}; };
 cdRefs.text.onchange=()=>{ codecCfg.text=cdRefs.text.checked; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_codec_text`, codecCfg.text); }catch(_e){}; };
 codecRender = function(){
-  cdRefs.rows.innerHTML='';
-  if(!codecLogs.length){ cdRefs.rows.innerHTML='<tr><td colspan="8">Sin datos</td></tr>'; return; }
-  codecLogs.forEach(rec=>{
+  renderChunked(codecLogs, cdRefs.rows, rec=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.codec)}</td><td>${rec.length}</td><td>${rec.isJSON}</td><td>${rec.isJWT}</td><td>${escHTML(rec.inputPreview)}</td><td>${escHTML(rec.outputPreview)}</td><td><button class="ptk-btn cd_in" data-id="${rec.id}">In</button> <button class="ptk-btn cd_out" data-id="${rec.id}">Out</button></td>`;
-    cdRefs.rows.appendChild(tr);
-  });
-  cdRefs.rows.querySelectorAll('.cd_in').forEach(btn=>{
-    btn.onclick=()=>{ const rec=codecLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(rec.inputFull); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='In',1200); } };
-  });
-  cdRefs.rows.querySelectorAll('.cd_out').forEach(btn=>{
-    btn.onclick=()=>{ const rec=codecLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(rec.outputFull); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='Out',1200); } };
-  });
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.codec)}</td><td>${rec.length}</td><td>${rec.isJSON}</td><td>${rec.isJWT}</td><td>${escHTML(rec.inputPreview)}</td><td>${escHTML(rec.outputPreview)}</td><td></td>`;
+    const actions=tr.lastElementChild;
+    const inBtn=document.createElement('button'); inBtn.className='ptk-btn'; inBtn.textContent='In';
+    inBtn.onclick=()=>{ clip(rec.inputFull); inBtn.textContent='¡Copiado!'; setTimeout(()=>inBtn.textContent='In',1200); };
+    const outBtn=document.createElement('button'); outBtn.className='ptk-btn'; outBtn.textContent='Out';
+    outBtn.onclick=()=>{ clip(rec.outputFull); outBtn.textContent='¡Copiado!'; setTimeout(()=>outBtn.textContent='Out',1200); };
+    const pin=document.createElement('button'); pin.className='ptk-btn'; pin.textContent=isPinned(cdPins,rec)?'Unpin':'Pin';
+    pin.onclick=()=>togglePin(cdPins,rec,pin,'codec');
+    actions.appendChild(inBtn); actions.appendChild(outBtn); actions.appendChild(pin);
+    return tr;
+  }, '<tr><td colspan="8">Sin datos</td></tr>');
 };
 cdRefs.clear.onclick=()=>{ codecLogs.length=0; codecRender(); updateRuntimeBadge(); };
 cdRefs.json.onclick=()=>{ const out=JSON.stringify(codecLogs,null,2); clip(out); cdRefs.json.textContent='¡Copiado!'; setTimeout(()=>cdRefs.json.textContent='JSON',1200); };
 cdRefs.csv.onclick=()=>{ const head=['ts','codec','length','isJSON','isJWT','input','output']; const rows=codecLogs.map(r=>({ts:new Date(r.ts).toISOString(),codec:r.codec,length:r.length,isJSON:r.isJSON,isJWT:r.isJWT,input:r.inputFull,output:r.outputFull})); csvDownload(`codecs_${nowStr()}.csv`, head, rows); };
+cdRefs.md.onclick=()=>{ const cols=['ts','codec','length','isJSON','isJWT','input','output']; const rows=cdPins.map(r=>({ts:new Date(r.ts).toISOString(),codec:r.codec,length:r.length,isJSON:r.isJSON,isJWT:r.isJWT,input:r.inputFull,output:r.outputFull})); clip(rowsToMarkdown(rows,cols)); cdRefs.md.textContent='¡Copiado!'; setTimeout(()=>cdRefs.md.textContent='Pinned MD',1200); };
 codecRender();
 updateRuntimeBadge();
 
@@ -2045,6 +2111,8 @@ tabCE.innerHTML = `
         <input id="ce_txt" class="ptk-input" placeholder="Texto" style="width:100px">
         <button id="ce_clear" class="ptk-btn">Clear</button>
         <button id="ce_json" class="ptk-btn">JSON</button>
+        <button id="ce_csv" class="ptk-btn">CSV</button>
+        <button id="ce_md" class="ptk-btn">Pinned MD</button>
       </div>
     </div>
     <div style="max-height:200px;overflow:auto">
@@ -2060,6 +2128,8 @@ const ceRefs = {
   txt: tabCE.querySelector('#ce_txt'),
   clear: tabCE.querySelector('#ce_clear'),
   json: tabCE.querySelector('#ce_json'),
+  csv: tabCE.querySelector('#ce_csv'),
+  md: tabCE.querySelector('#ce_md'),
   rows: tabCE.querySelector('#ce_rows')
 };
 function ceFiltered(){
@@ -2073,24 +2143,27 @@ function ceFiltered(){
 }
 renderCE = function(){
   const list = ceFiltered();
-  ceRefs.rows.innerHTML='';
-  if(!list.length){ ceRefs.rows.innerHTML='<tr><td colspan="6">Sin datos</td></tr>'; updateRuntimeBadge(); return; }
-  list.forEach(rec=>{
+  renderChunked(list, ceRefs.rows, rec=>{
     const src = rec.source ? `${rec.source}:${rec.line||''}:${rec.col||''}` : '';
-    const tr=document.createElement('tr');
     const stack = rec.stack ? `<details><summary>ver</summary><pre class="ptk-code">${escHTML(rec.stack)}</pre></details>` : '';
-    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.level)}</td><td>${escHTML(rec.message)}</td><td>${escHTML(src)}</td><td>${stack}</td><td><button class="ptk-btn ce_copy" data-id="${rec.id}">Copy</button></td>`;
-    ceRefs.rows.appendChild(tr);
-  });
-  ceRefs.rows.querySelectorAll('.ce_copy').forEach(btn=>{
-    btn.onclick=()=>{ const rec=consoleLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(JSON.stringify(rec,null,2)); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='Copy',1200); } };
-  });
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.level)}</td><td>${escHTML(rec.message)}</td><td>${escHTML(src)}</td><td>${stack}</td><td></td>`;
+    const actions=tr.lastElementChild;
+    const copy=document.createElement('button'); copy.className='ptk-btn'; copy.textContent='Copy';
+    copy.onclick=()=>{ clip(JSON.stringify(rec,null,2)); copy.textContent='¡Copiado!'; setTimeout(()=>copy.textContent='Copy',1200); };
+    const pin=document.createElement('button'); pin.className='ptk-btn'; pin.textContent=isPinned(cePins,rec)?'Unpin':'Pin';
+    pin.onclick=()=>togglePin(cePins,rec,pin,'console');
+    actions.appendChild(copy); actions.appendChild(pin);
+    return tr;
+  }, '<tr><td colspan="6">Sin datos</td></tr>');
   updateRuntimeBadge();
 };
 ceRefs.level.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_ce_level`, ceRefs.level.value); }catch(_e){}; renderCE(); };
 ceRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_ce_txt`, ceRefs.txt.value); }catch(_e){}; renderCE(); };
 ceRefs.clear.onclick=()=>{ consoleLogs.length=0; consoleLogKeys.clear(); renderCE(); renderConsole(); };
 ceRefs.json.onclick=()=>{ const out=JSON.stringify(ceFiltered(),null,2); clip(out); ceRefs.json.textContent='¡Copiado!'; setTimeout(()=>ceRefs.json.textContent='JSON',1200); };
+ceRefs.csv.onclick=()=>{ const head=['ts','level','message','source','line','col','stack']; const rows=ceFiltered().map(r=>({ts:new Date(r.ts).toISOString(),level:r.level,message:r.message,source:r.source||'',line:r.line||'',col:r.col||'',stack:r.stack||''})); csvDownload(`console_${nowStr()}.csv`, head, rows); };
+ceRefs.md.onclick=()=>{ const cols=['ts','level','message','source','stack']; const rows=cePins.map(r=>({ts:new Date(r.ts).toISOString(),level:r.level,message:r.message,source:r.source||'',stack:r.stack||''})); clip(rowsToMarkdown(rows,cols)); ceRefs.md.textContent='¡Copiado!'; setTimeout(()=>ceRefs.md.textContent='Pinned MD',1200); };
 try{ if(typeof GM_getValue==='function'){ ceRefs.level.value=GM_getValue(`${site}_ce_level`, ''); ceRefs.txt.value=GM_getValue(`${site}_ce_txt`, ''); } }catch(_e){}
 renderCE();
 
@@ -2106,11 +2179,12 @@ tabCrypto.innerHTML = `
         <button id="cr_clear" class="ptk-btn">Clear</button>
         <button id="cr_json" class="ptk-btn">JSON</button>
         <button id="cr_csv" class="ptk-btn">CSV</button>
+        <button id="cr_md" class="ptk-btn">Pinned MD</button>
       </div>
     </div>
     <div style="max-height:200px;overflow:auto">
       <table style="width:100%;border-collapse:collapse">
-        <thead><tr><th>ts</th><th>tipo</th><th>alg</th><th>key</th><th>iv</th><th>len</th><th>sample</th></tr></thead>
+        <thead><tr><th>ts</th><th>tipo</th><th>alg</th><th>key</th><th>iv</th><th>len</th><th>sample</th><th>acciones</th></tr></thead>
         <tbody id="cr_rows"></tbody>
       </table>
     </div>
@@ -2120,20 +2194,24 @@ const cyRefs = {
   clear: tabCrypto.querySelector('#cr_clear'),
   json: tabCrypto.querySelector('#cr_json'),
   csv: tabCrypto.querySelector('#cr_csv'),
+  md: tabCrypto.querySelector('#cr_md'),
   rows: tabCrypto.querySelector('#cr_rows')
 };
 cryptoRender = function(){
-  cyRefs.rows.innerHTML='';
-  if(!cryptoLogs.length){ cyRefs.rows.innerHTML='<tr><td colspan="7">Sin datos</td></tr>'; return; }
-  cryptoLogs.forEach(rec=>{
+  renderChunked(cryptoLogs, cyRefs.rows, rec=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.type)}</td><td>${escHTML(rec.alg)}</td><td>${escHTML(rec.keyPreview||'')}</td><td>${escHTML(rec.ivPreview||'')}</td><td>${rec.length||''}</td><td>${escHTML(rec.sample||'')}</td>`;
-    cyRefs.rows.appendChild(tr);
-  });
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.type)}</td><td>${escHTML(rec.alg)}</td><td>${escHTML(rec.keyPreview||'')}</td><td>${escHTML(rec.ivPreview||'')}</td><td>${rec.length||''}</td><td>${escHTML(rec.sample||'')}</td><td></td>`;
+    const actions=tr.lastElementChild;
+    const pin=document.createElement('button'); pin.className='ptk-btn'; pin.textContent=isPinned(cryptoPins,rec)?'Unpin':'Pin';
+    pin.onclick=()=>togglePin(cryptoPins,rec,pin,'crypto');
+    actions.appendChild(pin);
+    return tr;
+  }, '<tr><td colspan="8">Sin datos</td></tr>');
 };
 cyRefs.clear.onclick=()=>{ cryptoLogs.length=0; cryptoRender(); updateRuntimeBadge(); };
 cyRefs.json.onclick=()=>{ const out=JSON.stringify(cryptoLogs,null,2); clip(out); cyRefs.json.textContent='¡Copiado!'; setTimeout(()=>cyRefs.json.textContent='JSON',1200); };
 cyRefs.csv.onclick=()=>{ const head=['ts','type','alg','keyPreview','ivPreview','length','sample']; const rows=cryptoLogs.map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,alg:r.alg,keyPreview:r.keyPreview,ivPreview:r.ivPreview,length:r.length,sample:r.sample})); csvDownload(`crypto_${nowStr()}.csv`, head, rows); };
+cyRefs.md.onclick=()=>{ const cols=['ts','type','alg','keyPreview','ivPreview','length','sample']; const rows=cryptoPins.map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,alg:r.alg,keyPreview:r.keyPreview,ivPreview:r.ivPreview,length:r.length,sample:r.sample})); clip(rowsToMarkdown(rows,cols)); cyRefs.md.textContent='¡Copiado!'; setTimeout(()=>cyRefs.md.textContent='Pinned MD',1200); };
 cryptoRender();
 updateRuntimeBadge();
 

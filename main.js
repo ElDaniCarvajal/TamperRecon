@@ -2317,6 +2317,203 @@ rsRefs.pmToggle.onclick=()=>{
   csRefs.json.onclick=()=>{ const out={localStorage:cs.ls, sessionStorage:cs.ss, indexedDB:cs.idb}; textDownload(`storage_${nowStr()}.json`, JSON.stringify(out,null,2)); };
 
   /* ============================
+     TLS & certificate info
+  ============================ */
+  const tabTLS = panel.querySelector('#tab_security_tls');
+  const tlsTabBtn = panel.querySelector('#tabs_security .ptk-tab[data-tab="tls"]');
+  tabTLS.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">TLS &amp; Subdomains</div>
+        <div class="ptk-grid">
+          <button id="tls_run" class="ptk-btn">Resolver</button>
+          <button id="tls_csv" class="ptk-btn">CSV</button>
+          <label><input type="checkbox" id="tls_safe" checked> Safe Mode</label>
+        </div>
+      </div>
+      <div id="tls_status" style="margin:6px 0">En espera…</div>
+      <div id="tls_results"></div>
+    </div>
+  `;
+  const tlsRefs = {
+    run: tabTLS.querySelector('#tls_run'),
+    csv: tabTLS.querySelector('#tls_csv'),
+    safe: tabTLS.querySelector('#tls_safe'),
+    status: tabTLS.querySelector('#tls_status'),
+    results: tabTLS.querySelector('#tls_results')
+  };
+  const tlsData = { findings: [], sans: [], info:{} };
+  function tlsUpdateCount(){ if (tlsTabBtn) tlsTabBtn.textContent = `TLS (${tlsData.findings.length + tlsData.sans.length})`; }
+  function tlsPersist(){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_tls_info`, JSON.stringify(tlsData)); }catch(_e){} }
+  function tlsLoad(){ try{ if(typeof GM_getValue==='function'){ const j=GM_getValue(`${site}_tls_info`, 'null'); if(j) Object.assign(tlsData, JSON.parse(j)); } }catch(_e){} }
+  function collectDomains(){
+    const set=new Set([location.hostname]);
+    document.querySelectorAll('[src],[href]').forEach(el=>{
+      ['src','href'].forEach(a=>{
+        const v=el.getAttribute && el.getAttribute(a); if(!v) return;
+        try{ const u=new URL(v,location.href); set.add(u.hostname); }catch(_e){}
+      });
+    });
+    return Array.from(set);
+  }
+  function tlsRender(){
+    tlsRefs.results.innerHTML='';
+    if(tlsData.info){
+      const div=document.createElement('div'); div.className='ptk-row';
+      const proto=tlsData.info.nextHop||'';
+      const ver=tlsData.info.version||'n/d';
+      const cip=tlsData.info.cipher||'';
+      div.textContent = `TLS: ${ver}${cip?` ${cip}`:''} · HTTP: ${proto||'n/d'}`;
+      tlsRefs.results.appendChild(div);
+      if(!tlsData.info.version){ const note=document.createElement('div'); note.className='ptk-row'; note.textContent='(mejor esfuerzo: versión/cifrado no expuestos)'; tlsRefs.results.appendChild(note); }
+    }
+    tlsData.findings.forEach(f=>{
+      const div=document.createElement('div'); div.className='ptk-row';
+      const exp=f.expires?` · exp=${f.expires}`:'';
+      div.innerHTML = `<div><b>${escHTML(f.type)}</b> ${escHTML(f.name)} → <span class="ptk-code">${escHTML(f.value||'')}</span> (${escHTML(f.source)})${exp}</div>`;
+      tlsRefs.results.appendChild(div);
+    });
+    tlsRefs.status.textContent = `OK · hallazgos: ${tlsData.findings.length}`;
+  }
+  async function dohQuery(provider, name, type){
+    const url = provider==='google'
+      ? `https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${type}`
+      : `https://1.1.1.1/dns-query?name=${encodeURIComponent(name)}&type=${type}`;
+    const headers = provider==='google'?{}:{'Accept':'application/dns-json'};
+    return new Promise(res=>{
+      if(typeof GM_xmlhttpRequest==='function'){
+        GM_xmlhttpRequest({method:'GET',url,headers,onload:r=>{try{res(JSON.parse(r.responseText));}catch(_e){res(null);}},onerror:()=>res(null)});
+      }else{
+        fetch(url,{headers}).then(r=>r.json()).then(res).catch(()=>res(null));
+      }
+    });
+  }
+  async function crtQuery(domain){
+    const url=`https://crt.sh/?q=${encodeURIComponent('%.'+domain)}&output=json`;
+    return new Promise(res=>{
+      if(typeof GM_xmlhttpRequest==='function'){
+        GM_xmlhttpRequest({method:'GET',url,onload:r=>{try{res(JSON.parse(r.responseText));}catch(_e){res([]);}},onerror:()=>res([])});
+      }else{
+        fetch(url).then(r=>r.json()).then(res).catch(()=>res([]));
+      }
+    });
+  }
+  async function tlsRun(){
+    tlsData.findings=[]; tlsData.sans=[]; tlsData.info={};
+    tlsRefs.status.textContent='Resolviendo…';
+    const nav=global.performance && global.performance.getEntriesByType && global.performance.getEntriesByType('navigation')[0];
+    tlsData.info.nextHop=nav && nav.nextHopProtocol || '';
+    if(nav && nav.secureConnectionStart>0) tlsData.info.version='present';
+    const domains = tlsRefs.safe.checked ? [location.hostname] : collectDomains();
+    for(const d of domains){
+      const resp = await Promise.all([
+        dohQuery('google',d,'A'),dohQuery('google',d,'AAAA'),dohQuery('google',d,'CNAME'),
+        dohQuery('cloudflare',d,'A'),dohQuery('cloudflare',d,'AAAA'),dohQuery('cloudflare',d,'CNAME')
+      ]);
+      resp.forEach((r,idx)=>{
+        const src = idx<3 ? 'dns.google' : '1.1.1.1';
+        if(r && r.Answer){ r.Answer.forEach(a=>{ const t={1:'A',28:'AAAA',5:'CNAME'}[a.type]; if(t) tlsData.findings.push({type:t,name:d,value:a.data,source:src}); }); }
+      });
+    }
+    const crt = await crtQuery(location.hostname);
+    const seen=new Set();
+    crt.forEach(c=>{
+      const exp=c.not_after ? c.not_after.split(' ')[0] : '';
+      String(c.name_value||'').split('\n').forEach(n=>{
+        const name=n.trim(); if(!name || seen.has(name)) return;
+        seen.add(name); tlsData.sans.push({name,source:'crt.sh',expires:exp});
+        tlsData.findings.push({type:'SAN',name,value:'',source:'crt.sh',expires:exp});
+      });
+    });
+    tlsRender(); tlsUpdateCount(); tlsPersist();
+  }
+  tlsRefs.run.onclick=tlsRun;
+  tlsRefs.csv.onclick=()=>{ const head=['name','source','expires']; csvDownload(`tls_subdomains_${nowStr()}.csv`, head, tlsData.sans); };
+  tlsLoad(); if(tlsData.findings.length){ tlsRender(); tlsUpdateCount(); }
+
+  /* ============================
+     ServiceWorkers & Cache
+  ============================ */
+  const tabSW = panel.querySelector('#tab_security_sw');
+  const swTabBtn = panel.querySelector('#tabs_security .ptk-tab[data-tab="sw"]');
+  tabSW.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">Service Workers &amp; CacheStorage</div>
+        <div class="ptk-grid">
+          <button id="sc_refresh" class="ptk-btn">Refresh</button>
+          <button id="sc_clear" class="ptk-btn">Clear</button>
+          <button id="sc_csv" class="ptk-btn">CSV</button>
+          <input type="text" id="sc_search" placeholder="Buscar" style="width:120px">
+        </div>
+      </div>
+      <div id="sc_status" style="margin:6px 0">En espera…</div>
+      <div id="sc_results"></div>
+    </div>
+  `;
+  const scRefs={refresh:tabSW.querySelector('#sc_refresh'),clear:tabSW.querySelector('#sc_clear'),csv:tabSW.querySelector('#sc_csv'),search:tabSW.querySelector('#sc_search'),status:tabSW.querySelector('#sc_status'),results:tabSW.querySelector('#sc_results')};
+  const scData={entries:[]};
+  function scUpdateCount(){ if(swTabBtn) swTabBtn.textContent=`SW & Cache (${scData.entries.length})`; }
+  function scPersist(){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_sw_cache`, JSON.stringify(scData.entries)); }catch(_e){} }
+  function scLoad(){ try{ if(typeof GM_getValue==='function'){ const j=GM_getValue(`${site}_sw_cache`, 'null'); if(j) scData.entries = JSON.parse(j); } }catch(_e){} }
+  function scRender(){
+    scRefs.results.innerHTML='';
+    const q=(scRefs.search.value||'').toLowerCase();
+    scData.entries.forEach(e=>{
+      const line=JSON.stringify(e).toLowerCase();
+      if(q && !line.includes(q)) return;
+      const div=document.createElement('div'); div.className='ptk-row';
+      if(e.kind==='sw'){
+        div.innerHTML=`<div><b>SW</b> <span class="ptk-code">${escHTML(e.scriptURL||'')}</span> · scope=${escHTML(e.scope||'')} · state=${escHTML(e.state||'')}</div>`;
+      }else{
+        const risk=/Authorization|Set-Cookie/i.test(e.flags||'')?' style="color:#f87171"':'';
+        div.innerHTML=`<div${risk}><b>Cache</b> [${escHTML(e.cache)}] <a class="ptk-link" href="${e.url}" target="_blank" rel="noopener noreferrer">${escHTML(e.url)}</a>${e.size?` · ${escHTML(e.size)}`:''}${e.flags?` · ${escHTML(e.flags)}`:''}</div>`;
+      }
+      scRefs.results.appendChild(div);
+    });
+    scRefs.status.textContent=`${scData.entries.length?`Total: ${scData.entries.length}`:'En espera…'}`;
+  }
+  async function scRefresh(){
+    scRefs.status.textContent='Escaneando…';
+    scData.entries=[];
+    try{
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+        const regs=await navigator.serviceWorker.getRegistrations();
+        regs.forEach(r=>{
+          const state=r.active?'active':(r.waiting?'waiting':(r.installing?'installing':''));
+          scData.entries.push({kind:'sw',scriptURL:(r.active&&r.active.scriptURL)||(r.waiting&&r.waiting.scriptURL)||(r.installing&&r.installing.scriptURL)||'',scope:r.scope||'',state});
+        });
+      }
+    }catch(_e){}
+    try{
+      if(caches){
+        const names=await caches.keys();
+        for(const name of names){
+          const cache=await caches.open(name);
+          const reqs=await cache.keys();
+          const resps=await cache.matchAll();
+          for(let i=0;i<reqs.length && i<200;i++){
+            const req=reqs[i]; const res=resps[i];
+            let flags=[];
+            try{ if(req.headers && req.headers.get('authorization')) flags.push('Authorization'); }catch(_e){}
+            try{ if(res && res.headers && res.headers.get('set-cookie')) flags.push('Set-Cookie'); }catch(_e){}
+            try{ const ct=res && res.headers && res.headers.get('content-type') || ''; if(/json/i.test(ct)) flags.push('JSON'); }catch(_e){}
+            const size=(res && res.headers && res.headers.get('content-length'))||'';
+            scData.entries.push({kind:'cache',cache:name,url:req.url,flags:flags.join(','),size});
+          }
+        }
+      }
+    }catch(_e){}
+    scRender(); scUpdateCount(); scPersist();
+    scRefs.status.textContent='OK';
+  }
+  scRefs.refresh.onclick=scRefresh;
+  scRefs.clear.onclick=()=>{ scData.entries=[]; scRender(); scUpdateCount(); scPersist(); };
+  scRefs.csv.onclick=()=>{ const head=['kind','scriptURL','scope','state','cache','url','flags','size']; csvDownload(`sw_cache_${nowStr()}.csv`, head, scData.entries); };
+  scRefs.search.addEventListener('input', scRender);
+  scLoad(); scRender(); scUpdateCount();
+
+  /* ============================
      OpenAPI/Swagger discovery
   ============================ */
   const tabOA = panel.querySelector('#tab_apis_openapi');

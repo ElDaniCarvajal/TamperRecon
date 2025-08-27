@@ -666,6 +666,9 @@ if (typeof window !== 'undefined') (function () {
   const codecLogs = [];
   let codecRender = ()=>{};
   let codecSeq = 0;
+  const cryptoLogs = [];
+  let cryptoRender = ()=>{};
+  let cryptoSeq = 0;
   function addCodecLog(rec){
     rec.id = ++codecSeq;
     if(rec.inputPreview===undefined) rec.inputPreview = ebPreview(rec.input,100);
@@ -676,6 +679,16 @@ if (typeof window !== 'undefined') (function () {
     logEvent('codec', rec);
     updateRuntimeBadge();
     try{ codecRender(); }catch(_e){}
+  }
+  function addCryptoLog(rec){
+    rec.id = ++cryptoSeq;
+    if(rec.keyPreview !== undefined) rec.keyPreview = redact(rec.keyPreview);
+    if(rec.ivPreview !== undefined) rec.ivPreview = redact(rec.ivPreview);
+    if(rec.sample !== undefined) rec.sample = redact(rec.sample);
+    cryptoLogs.push(rec);
+    logEvent('crypto', rec);
+    updateRuntimeBadge();
+    try{ cryptoRender(); }catch(_e){}
   }
   function addMsgLog(rec){
     if(msgPaused) return;
@@ -699,6 +712,25 @@ if (typeof window !== 'undefined') (function () {
     addMsgLog(rec);
   }
   try{ if(globalThis.TREventBus){ if(globalThis.TREventBuffers && globalThis.TREventBuffers.pm) globalThis.TREventBuffers.pm.all().forEach(handlePmEvent); globalThis.TREventBus.subscribe('pm:*', handlePmEvent); } }catch(_e){}
+
+  function handleCryptoEvent(ev){
+    const type = (ev.type||'').split(':')[1] || '';
+    addCryptoLog({
+      ts: ev.ts || Date.now(),
+      type,
+      alg: ev.alg || '',
+      keyPreview: ev.keyPreview || '',
+      ivPreview: ev.ivPreview || '',
+      length: ev.length || 0,
+      sample: ev.sample || ''
+    });
+  }
+  try{
+    if(globalThis.TREventBus){
+      if(globalThis.TREventBuffers && globalThis.TREventBuffers.crypto) globalThis.TREventBuffers.crypto.all().forEach(handleCryptoEvent);
+      globalThis.TREventBus.subscribe('crypto:*', handleCryptoEvent);
+    }
+  }catch(_e){}
 
   const origFetch = window.fetch;
   if (origFetch) window.fetch = function(input, init){
@@ -914,7 +946,7 @@ if (typeof window !== 'undefined') (function () {
           </div>
         </section>
         <section id="tab_runtime_codecs" style="display:none"></section>
-        <section id="tab_runtime_crypto" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_crypto" style="display:none"></section>
         <section id="tab_runtime_console" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_runtime_globals" style="display:none"><div class="ptk-row">Placeholder</div></section>
       </div>
@@ -1024,12 +1056,14 @@ if (typeof window !== 'undefined') (function () {
   const runtimeNetTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="network"]');
   const runtimeMsgTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="messaging"]');
   const runtimeCodecTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="codecs"]');
+  const runtimeCryptoTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="crypto"]');
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
     if (runtimeNetTabBtn) runtimeNetTabBtn.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
     if (runtimeMsgTabBtn) runtimeMsgTabBtn.textContent = `Messaging (${msgLogs.length})`;
     if (runtimeCodecTabBtn) runtimeCodecTabBtn.textContent = `Codecs (${codecLogs.length})`;
+    if (runtimeCryptoTabBtn) runtimeCryptoTabBtn.textContent = `Crypto (${cryptoLogs.length})`;
   };
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
@@ -1957,6 +1991,49 @@ cdRefs.csv.onclick=()=>{ const head=['ts','codec','length','isJSON','isJWT','inp
 codecRender();
 updateRuntimeBadge();
 
+/* ============================
+   Runtime Crypto
+============================ */
+const tabCrypto = panel.querySelector('#tab_runtime_crypto');
+tabCrypto.innerHTML = `
+  <div class="ptk-box">
+    <div class="ptk-flex">
+      <div class="ptk-hdr">Crypto</div>
+      <div class="ptk-grid">
+        <button id="cr_clear" class="ptk-btn">Clear</button>
+        <button id="cr_json" class="ptk-btn">JSON</button>
+        <button id="cr_csv" class="ptk-btn">CSV</button>
+      </div>
+    </div>
+    <div style="max-height:200px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th>ts</th><th>tipo</th><th>alg</th><th>key</th><th>iv</th><th>len</th><th>sample</th></tr></thead>
+        <tbody id="cr_rows"></tbody>
+      </table>
+    </div>
+  </div>
+`;
+const cyRefs = {
+  clear: tabCrypto.querySelector('#cr_clear'),
+  json: tabCrypto.querySelector('#cr_json'),
+  csv: tabCrypto.querySelector('#cr_csv'),
+  rows: tabCrypto.querySelector('#cr_rows')
+};
+cryptoRender = function(){
+  cyRefs.rows.innerHTML='';
+  if(!cryptoLogs.length){ cyRefs.rows.innerHTML='<tr><td colspan="7">Sin datos</td></tr>'; return; }
+  cryptoLogs.forEach(rec=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.type)}</td><td>${escHTML(rec.alg)}</td><td>${escHTML(rec.keyPreview||'')}</td><td>${escHTML(rec.ivPreview||'')}</td><td>${rec.length||''}</td><td>${escHTML(rec.sample||'')}</td>`;
+    cyRefs.rows.appendChild(tr);
+  });
+};
+cyRefs.clear.onclick=()=>{ cryptoLogs.length=0; cryptoRender(); updateRuntimeBadge(); };
+cyRefs.json.onclick=()=>{ const out=JSON.stringify(cryptoLogs,null,2); clip(out); cyRefs.json.textContent='¡Copiado!'; setTimeout(()=>cyRefs.json.textContent='JSON',1200); };
+cyRefs.csv.onclick=()=>{ const head=['ts','type','alg','keyPreview','ivPreview','length','sample']; const rows=cryptoLogs.map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,alg:r.alg,keyPreview:r.keyPreview,ivPreview:r.ivPreview,length:r.length,sample:r.sample})); csvDownload(`crypto_${nowStr()}.csv`, head, rows); };
+cryptoRender();
+updateRuntimeBadge();
+
 { // Global variables/functions viewer
   try {
     const iframe = document.createElement('iframe');
@@ -1987,6 +2064,7 @@ updateRuntimeBadge();
             const ivStr = cfg && cfg.iv && cfg.iv.toString ? cfg.iv.toString() : (cfg && cfg.iv ? String(cfg.iv) : '');
             const dataStr = data && data.toString ? data.toString() : String(data);
             addRuntimeLog({ type:'AES.'+fnName, key:keyStr, iv:ivStr, data:dataStr });
+            try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:`crypto:aes.${fnName}`, alg:'AES', keyPreview:redact(ebPreview(keyStr,80)), ivPreview:redact(ebPreview(ivStr,80)), length:dataStr.length||0, sample:redact(ebPreview(dataStr,80)), ts:Date.now() }); }catch(_e){}
           }catch(e){ logError(e); }
           return orig.apply(this, arguments);
         };
@@ -4371,8 +4449,10 @@ updateRuntimeBadge();
           const res = await orig(...args);
           let len = res && (res.byteLength || res.length) || 0;
           let sample = '';
+          let iv = '';
           try{ sample = ebPreview(new Uint8Array(res).slice(0,16)); }catch(_e){}
-          TREventBus.emit({ type:`crypto:${op}`, alg: (alg && alg.name)||String(alg), length: len, sample, ts:Date.now() });
+          try{ if(alg && alg.iv) iv = ebPreview(new Uint8Array(alg.iv).slice(0,16)); }catch(_e){}
+          try{ TREventBus.emit({ type:`crypto:${op}`, alg: (alg && alg.name)||String(alg), ivPreview:redact(iv), length: len, sample:redact(sample), ts:Date.now() }); }catch(_e){}
           return res;
         };
       }
@@ -4382,7 +4462,7 @@ updateRuntimeBadge();
       s.exportKey = async function(format, key){
         const res = await origExportKey(format, key);
         let len = res && (res.byteLength || res.length) || 0;
-        TREventBus.emit({ type:'crypto:exportKey', alg:format, length:len, sample:ebPreview(res,80), ts:Date.now() });
+        try{ TREventBus.emit({ type:'crypto:exportKey', alg:format, length:len, sample:redact(ebPreview(res,80)), ts:Date.now() }); }catch(_e){}
         logActivity('exportKey', format);
         return res;
       };

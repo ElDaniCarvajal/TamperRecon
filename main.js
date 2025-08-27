@@ -4701,6 +4701,7 @@ updateRuntimeBadge();
       const wrappedPost = function(msg, target, transfer){
         try{
           TREventBus.emit({ type:'pm:postMessage', phase:'send', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:ebPreview(msg), ts:Date.now() });
+          if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:postMessage', origin:(location && location.origin)||'', target: typeof target==='string'?target:'frame', data:ebPreview(msg), ts:Date.now() });
         }catch(_e){}
         try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
         return origPostMessage.call(this, msg, target, transfer);
@@ -4710,7 +4711,7 @@ updateRuntimeBadge();
       global.postMessage = wrappedPost;
       if (global.addEventListener){
         global.addEventListener('message', ev=>{
-          try{ TREventBus.emit({ type:'pm:postMessage', phase:'receive', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+          try{ TREventBus.emit({ type:'pm:postMessage', phase:'receive', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:postMessage', origin:ev.origin, target:(location && location.origin)||'', data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
         });
       }
     }
@@ -4724,12 +4725,12 @@ updateRuntimeBadge();
         TREventBus.emit({ type:'pm:broadcast', phase:'open', channel:name, origin:(location && location.origin)||'', target:name, size:0, data:null, ts:Date.now() });
         const origBCPost = bc.postMessage;
         bc.postMessage = function(msg){
-          try{ TREventBus.emit({ type:'pm:broadcast', phase:'send', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
+          try{ TREventBus.emit({ type:'pm:broadcast', phase:'send', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:broadcast', channel:name, origin:(location && location.origin)||'', target:name, data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
           try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
           return origBCPost.call(bc, msg);
         };
         bc.addEventListener('message', ev=>{
-          try{ TREventBus.emit({ type:'pm:broadcast', phase:'receive', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+          try{ TREventBus.emit({ type:'pm:broadcast', phase:'receive', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:broadcast', channel:name, origin:name, target:(location && location.origin)||'', data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
           try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); }
         });
         return bc;

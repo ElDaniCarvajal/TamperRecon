@@ -866,14 +866,17 @@ if (typeof window !== 'undefined') (function () {
   }
   function handlePmEvent(ev){
     const base = (ev.type||'').split(':')[1] || '';
+    const full = ev.data || '';
+    const size = ev.size || (full && full.length) || 0;
     const rec = {
       ts: ev.ts || Date.now(),
       channel: ev.channel || 'postMessage',
       type: ev.phase ? `${base}:${ev.phase}` : base,
       origin: ev.origin || '',
       target: ev.target || '',
-      size: ev.size || 0,
-      preview: ev.data || ''
+      size,
+      data: full,
+      preview: size>128 ? redact(full) : full
     };
     addMsgLog(rec);
   }
@@ -1154,6 +1157,7 @@ if (typeof window !== 'undefined') (function () {
                 <tbody id="msg_rows"></tbody>
               </table>
             </div>
+            <div id="msg_det" class="ptk-box" style="display:none"></div>
           </div>
         </section>
         <section id="tab_runtime_codecs" style="display:none"></section>
@@ -2230,7 +2234,8 @@ const msgRefs = {
   json: tabMessaging.querySelector('#msg_json'),
   csv: tabMessaging.querySelector('#msg_csv'),
   md: tabMessaging.querySelector('#msg_md'),
-  rows: tabMessaging.querySelector('#msg_rows')
+  rows: tabMessaging.querySelector('#msg_rows'),
+  details: tabMessaging.querySelector('#msg_det')
 };
 function msgFiltered(){
   const t=msgRefs.txt.value.toLowerCase();
@@ -2238,7 +2243,7 @@ function msgFiltered(){
   const o=msgRefs.origin.value.toLowerCase();
   const g=msgRefs.target.value.toLowerCase();
   return msgLogs.filter(r=>{
-    if(t && !(r.preview||'').toLowerCase().includes(t)) return false;
+    if(t && !(r.data||'').toLowerCase().includes(t)) return false;
     if(c && !(r.channel||'').toLowerCase().includes(c)) return false;
     if(o && !(r.origin||'').toLowerCase().includes(o)) return false;
     if(g && !(r.target||'').toLowerCase().includes(g)) return false;
@@ -2251,6 +2256,19 @@ msgRender = function(){
     const tr=document.createElement('tr');
     tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.channel+'/'+rec.type)}</td><td>${escHTML(rec.origin)}</td><td>${escHTML(rec.target)}</td><td>${rec.size}</td><td>${escHTML(rec.preview)}</td><td></td>`;
     const actions=tr.lastElementChild;
+    const copy=document.createElement('button'); copy.className='ptk-btn'; copy.textContent='Copy';
+    copy.onclick=()=>{ clip(JSON.stringify({ts:rec.ts,channel:rec.channel,type:rec.type,origin:rec.origin,target:rec.target,size:rec.size,data:rec.data},null,2)); copy.textContent='¡Copiado!'; setTimeout(()=>copy.textContent='Copy',1200); };
+    actions.appendChild(copy);
+    const det=document.createElement('button'); det.className='ptk-btn'; det.textContent='Details';
+    det.onclick=()=>{
+      let html=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.channel+'/'+rec.type)}</div><button id="msg_det_close" class="ptk-btn">Cerrar</button></div>`;
+      html+=`<div><b>Origin</b> ${escHTML(rec.origin)}</div>`;
+      html+=`<div><b>Target</b> ${escHTML(rec.target)}</div>`;
+      html+=`<div><b>Payload (${rec.size})</b><pre class="ptk-code">${escHTML(rec.size>128?redact(rec.data):rec.data)}</pre></div>`;
+      msgRefs.details.innerHTML=html; msgRefs.details.style.display='';
+      msgRefs.details.querySelector('#msg_det_close').onclick=()=>{ msgRefs.details.style.display='none'; };
+    };
+    actions.appendChild(det);
     const pin=document.createElement('button'); pin.className='ptk-btn'; pin.textContent=isPinned(msgPins,rec)?'Unpin':'Pin';
     pin.onclick=()=>togglePin(msgPins,rec,pin,'msg');
     actions.appendChild(pin);
@@ -2263,7 +2281,7 @@ msgRefs.origin.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValu
 msgRefs.target.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_target`, msgRefs.target.value); }catch(_e){}; msgRender(); };
 msgRefs.clear.onclick=()=>{ msgLogs.length=0; msgRender(); updateRuntimeBadge(); };
 msgRefs.pause.onclick=()=>{ msgPaused=!msgPaused; msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_paused`, msgPaused); }catch(_e){}; };
-msgRefs.json.onclick=()=>{ const out=JSON.stringify(msgFiltered(),null,2); clip(out); msgRefs.json.textContent='¡Copiado!'; setTimeout(()=>msgRefs.json.textContent='JSON',1200); };
+msgRefs.json.onclick=()=>{ const rows=msgFiltered().map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); clip(JSON.stringify(rows,null,2)); msgRefs.json.textContent='¡Copiado!'; setTimeout(()=>msgRefs.json.textContent='JSON',1200); };
 msgRefs.csv.onclick=()=>{ const head=['ts','channel','type','origin','target','size','preview']; const rows=msgFiltered().map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); csvDownload(`messaging_${nowStr()}.csv`, head, rows); };
 msgRefs.md.onclick=()=>{ const cols=['ts','channel','type','origin','target','size','preview']; const rows=msgPins.map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); clip(rowsToMarkdown(rows,cols)); msgRefs.md.textContent='¡Copiado!'; setTimeout(()=>msgRefs.md.textContent='Pinned MD',1200); };
 try{ if(typeof GM_getValue==='function'){ msgRefs.txt.value=GM_getValue(`${site}_msg_txt`, ''); msgRefs.channel.value=GM_getValue(`${site}_msg_channel`, ''); msgRefs.origin.value=GM_getValue(`${site}_msg_origin`, ''); msgRefs.target.value=GM_getValue(`${site}_msg_target`, ''); msgPaused=GM_getValue(`${site}_msg_paused`, false); msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; } }catch(_e){}
@@ -4804,8 +4822,9 @@ updateRuntimeBadge();
       const origPostMessage = global.postMessage;
       const wrappedPost = function(msg, target, transfer){
         try{
-          TREventBus.emit({ type:'pm:postMessage', phase:'send', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:ebPreview(msg), ts:Date.now() });
-          if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:postMessage', origin:(location && location.origin)||'', target: typeof target==='string'?target:'frame', data:ebPreview(msg), ts:Date.now() });
+          const dataStr = truncateBytes(ebToString(msg));
+          TREventBus.emit({ type:'pm:postMessage', phase:'send', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:dataStr, ts:Date.now() });
+          if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:postMessage', origin:(location && location.origin)||'', target: typeof target==='string'?target:'frame', data:dataStr, ts:Date.now() });
         }catch(_e){}
         try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
         return origPostMessage.call(this, msg, target, transfer);
@@ -4815,7 +4834,7 @@ updateRuntimeBadge();
       global.postMessage = wrappedPost;
       if (global.addEventListener){
         global.addEventListener('message', ev=>{
-          try{ TREventBus.emit({ type:'pm:postMessage', phase:'receive', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:postMessage', origin:ev.origin, target:(location && location.origin)||'', data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+          try{ const dataStr = truncateBytes(ebToString(ev.data)); TREventBus.emit({ type:'pm:postMessage', phase:'receive', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:dataStr, ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:postMessage', origin:ev.origin, target:(location && location.origin)||'', data:dataStr, ts:Date.now() }); }catch(_e){}
         });
       }
     }
@@ -4829,12 +4848,12 @@ updateRuntimeBadge();
         TREventBus.emit({ type:'pm:broadcast', phase:'open', channel:name, origin:(location && location.origin)||'', target:name, size:0, data:null, ts:Date.now() });
         const origBCPost = bc.postMessage;
         bc.postMessage = function(msg){
-          try{ TREventBus.emit({ type:'pm:broadcast', phase:'send', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:broadcast', channel:name, origin:(location && location.origin)||'', target:name, data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
+          try{ const dataStr = truncateBytes(ebToString(msg)); TREventBus.emit({ type:'pm:broadcast', phase:'send', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:dataStr, ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:broadcast', channel:name, origin:(location && location.origin)||'', target:name, data:dataStr, ts:Date.now() }); }catch(_e){}
           try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
           return origBCPost.call(bc, msg);
         };
         bc.addEventListener('message', ev=>{
-          try{ TREventBus.emit({ type:'pm:broadcast', phase:'receive', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:broadcast', channel:name, origin:name, target:(location && location.origin)||'', data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+          try{ const dataStr = truncateBytes(ebToString(ev.data)); TREventBus.emit({ type:'pm:broadcast', phase:'receive', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:dataStr, ts:Date.now() }); if(globalThis.EventBus && typeof globalThis.EventBus.emit==='function') globalThis.EventBus.emit({ type:'pm:broadcast', channel:name, origin:name, target:(location && location.origin)||'', data:dataStr, ts:Date.now() }); }catch(_e){}
           try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); }
         });
         return bc;

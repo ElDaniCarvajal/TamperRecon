@@ -580,28 +580,91 @@ if (typeof window !== 'undefined') (function () {
       <div class="ptk-hdr">Pentest Toolkit — ${location.hostname}</div>
       <div class="ptk-grid"><button id="ptk_toggle" class="ptk-btn">Ocultar</button></div>
     </div>
-      <div class="ptk-tabs" id="tabs">
-        <div class="ptk-tab active" data-tab="files">Files</div>
-        <div class="ptk-tab" data-tab="js">JS Hunter</div>
-        <div class="ptk-tab" data-tab="runtime">Runtime Secrets</div>
-        <div class="ptk-tab" data-tab="crawler">Crawler</div>
-        <div class="ptk-tab" data-tab="versions">Versions</div>
-        <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
-        <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
-        <div class="ptk-tab" data-tab="hard">Hardening</div>
-        <div class="ptk-tab" data-tab="console">Console</div>
-        <div class="ptk-tab" data-tab="errors">Errors</div>
+      <div class="ptk-tabs" id="top_tabs">
+        <div class="ptk-tab" data-tab="discover">Discover</div>
+        <div class="ptk-tab" data-tab="apis">APIs</div>
+        <div class="ptk-tab" data-tab="security">Security</div>
+        <div class="ptk-tab" data-tab="runtime">Runtime</div>
+        <div class="ptk-tab active" data-tab="report">Report/Settings</div>
       </div>
-      <section id="tab_files"></section>
-      <section id="tab_js" style="display:none"></section>
-      <section id="tab_runtime" style="display:none"></section>
-      <section id="tab_crawler" style="display:none"></section>
-      <section id="tab_versions" style="display:none"></section>
-      <section id="tab_fuzzer" style="display:none"></section>
-      <section id="tab_buckets" style="display:none"></section>
-      <section id="tab_hard" style="display:none"></section>
-      <section id="tab_console" style="display:none"></section>
-      <section id="tab_errors" style="display:none"></section>
+      <div id="top_discover" style="display:none">
+        <div class="ptk-tabs" id="tabs_discover">
+          <div class="ptk-tab active" data-tab="files">Files (0)</div>
+          <div class="ptk-tab" data-tab="js">JS Hunter (0)</div>
+          <div class="ptk-tab" data-tab="crawler">Crawler (0)</div>
+          <div class="ptk-tab" data-tab="debug">Source Maps / Debug Artefacts (0)</div>
+        </div>
+        <section id="tab_discover_files"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_discover_js" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_discover_crawler" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_discover_debug" style="display:none"><div class="ptk-row">Placeholder</div></section>
+      </div>
+      <div id="top_apis" style="display:none">
+        <div class="ptk-tabs" id="tabs_apis">
+          <div class="ptk-tab active" data-tab="openapi">OpenAPI/Swagger (0)</div>
+          <div class="ptk-tab" data-tab="graphql">GraphQL (0)</div>
+          <div class="ptk-tab" data-tab="cors">CORS Tester (0)</div>
+          <div class="ptk-tab" data-tab="ratelimit">Rate-Limit Probe (0)</div>
+          <div class="ptk-tab" data-tab="fuzzer">API Fuzzer (0)</div>
+        </div>
+        <section id="tab_apis_openapi"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_graphql" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_cors" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_ratelimit" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_fuzzer" style="display:none"><div class="ptk-row">Placeholder</div></section>
+      </div>
+      <div id="top_security" style="display:none">
+        <div class="ptk-tabs" id="tabs_security">
+          <div class="ptk-tab active" data-tab="versions">Versions/Headers/Policies (0)</div>
+          <div class="ptk-tab" data-tab="cookies">Cookies & Storage (0)</div>
+          <div class="ptk-tab" data-tab="tls">TLS (0)</div>
+          <div class="ptk-tab" data-tab="sw">SW & Cache (0)</div>
+        </div>
+        <section id="tab_security_versions"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_security_cookies" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_security_tls" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_security_sw" style="display:none"><div class="ptk-row">Placeholder</div></section>
+      </div>
+      <div id="top_runtime" style="display:none">
+        <div class="ptk-tabs" id="tabs_runtime">
+          <div class="ptk-tab active" data-tab="network">Network (0)</div>
+          <div class="ptk-tab" data-tab="messaging">Messaging (0)</div>
+          <div class="ptk-tab" data-tab="codecs">Codecs (0)</div>
+          <div class="ptk-tab" data-tab="crypto">Crypto (0)</div>
+          <div class="ptk-tab" data-tab="console">Console & Errors (0)</div>
+          <div class="ptk-tab" data-tab="globals">Globals/Vars (0)</div>
+        </div>
+        <section id="tab_runtime_network"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_messaging" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_codecs" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_crypto" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_console" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_globals" style="display:none"><div class="ptk-row">Placeholder</div></section>
+      </div>
+      <div id="top_report">
+        <div class="ptk-tabs" id="tabs">
+          <div class="ptk-tab active" data-tab="files">Files</div>
+          <div class="ptk-tab" data-tab="js">JS Hunter</div>
+          <div class="ptk-tab" data-tab="runtime">Runtime Secrets</div>
+          <div class="ptk-tab" data-tab="crawler">Crawler</div>
+          <div class="ptk-tab" data-tab="versions">Versions</div>
+          <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
+          <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
+          <div class="ptk-tab" data-tab="hard">Hardening</div>
+          <div class="ptk-tab" data-tab="console">Console</div>
+          <div class="ptk-tab" data-tab="errors">Errors</div>
+        </div>
+        <section id="tab_files"></section>
+        <section id="tab_js" style="display:none"></section>
+        <section id="tab_runtime" style="display:none"></section>
+        <section id="tab_crawler" style="display:none"></section>
+        <section id="tab_versions" style="display:none"></section>
+        <section id="tab_fuzzer" style="display:none"></section>
+        <section id="tab_buckets" style="display:none"></section>
+        <section id="tab_hard" style="display:none"></section>
+        <section id="tab_console" style="display:none"></section>
+        <section id="tab_errors" style="display:none"></section>
+      </div>
       `;
   root.appendChild(panel);
 
@@ -639,10 +702,56 @@ if (typeof window !== 'undefined') (function () {
     panel.style.display = hide ? '' : 'none';
     btnToggle.textContent = hide ? 'Ocultar' : 'Mostrar';
   };
-  const tabsEl = panel.querySelector('#tabs');
-  const runtimeTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="runtime"]');
-  const consoleTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="console"]');
-  const errorsTabBtn = tabsEl.querySelector('.ptk-tab[data-tab="errors"]');
+  const site = location.hostname || 'global';
+  const topTabsEl = panel.querySelector('#top_tabs');
+  function showTopTab(name){
+    ['discover','apis','security','runtime','report'].forEach(t=>{
+      const sec = panel.querySelector('#top_'+t);
+      if (sec) sec.style.display = t===name ? '' : 'none';
+      const btn = topTabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
+      if (btn) btn.classList.toggle('active', t===name);
+    });
+    try{ if (typeof GM_setValue === 'function') GM_setValue(`ptk_top_${site}`, name); }catch(_e){}
+  }
+  topTabsEl.addEventListener('click', ev=>{
+    const t = ev.target && ev.target.closest('.ptk-tab');
+    if (t) showTopTab(t.dataset.tab);
+  });
+  let savedTop = 'report';
+  try{ if (typeof GM_getValue === 'function') savedTop = GM_getValue(`ptk_top_${site}`, savedTop); }catch(_e){}
+  showTopTab(savedTop);
+
+  function initTabs(prefix, list, wrap){
+    const tabsEl = wrap.querySelector('.ptk-tabs');
+    function show(name){
+      list.forEach(t=>{
+        const sec = wrap.querySelector('#tab_'+(prefix?prefix+'_':'')+t);
+        if (sec) sec.style.display = t===name ? '' : 'none';
+        const btn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
+        if (btn) btn.classList.toggle('active', t===name);
+      });
+      try{ if (typeof GM_setValue === 'function') GM_setValue(`${site}_${prefix||'report'}_tab`, name); }catch(_e){}
+    }
+    tabsEl.addEventListener('click', ev=>{
+      const t = ev.target && ev.target.closest('.ptk-tab');
+      if (t) show(t.dataset.tab);
+    });
+    let saved = list[0];
+    try{ if (typeof GM_getValue === 'function') saved = GM_getValue(`${site}_${prefix||'report'}_tab`, list[0]); }catch(_e){}
+    show(saved);
+    return show;
+  }
+
+  const showReportTab = initTabs('', ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','console','errors'], panel.querySelector('#top_report'));
+  initTabs('discover', ['files','js','crawler','debug'], panel.querySelector('#top_discover'));
+  initTabs('apis', ['openapi','graphql','cors','ratelimit','fuzzer'], panel.querySelector('#top_apis'));
+  initTabs('security', ['versions','cookies','tls','sw'], panel.querySelector('#top_security'));
+  initTabs('runtime', ['network','messaging','codecs','crypto','console','globals'], panel.querySelector('#top_runtime'));
+
+  const reportTabsEl = panel.querySelector('#tabs');
+  const runtimeTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="runtime"]');
+  const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
+  const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
     if (runtimeTabBtn) runtimeTabBtn.textContent = `Runtime Secrets (${runtimeLogs.length})`;
   };
@@ -655,13 +764,6 @@ if (typeof window !== 'undefined') (function () {
   updateRuntimeBadge();
   updateConsoleBadge();
   updateErrorBadge();
-  function showTab(name){
-      ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','console','errors'].forEach(t=>{
-      panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
-      const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
-      if (tabBtn) tabBtn.classList.toggle('active', t===name);
-    });
-  }
   const tabConsole = panel.querySelector('#tab_console');
   renderConsole = function(){
     if (!tabConsole) return;
@@ -690,17 +792,13 @@ if (typeof window !== 'undefined') (function () {
   };
   renderErrors();
   runtimeNotify = function(){
-    showTab('runtime');
+    showTopTab('report');
+    showReportTab('runtime');
     if (!runtimeAlerted){
       runtimeAlerted = true;
       try{ addConsoleLog('log', ['Runtime secret found']); }catch(e){ logError(e); }
     }
   };
-  tabsEl.addEventListener('click', (e)=>{
-    const t = e.target && e.target.closest('.ptk-tab');
-    if (!t) return;
-    showTab(t.dataset.tab);
-  });
 
   /* ============================
      FILES (igual que antes, con CSV file/line)

@@ -14,23 +14,6 @@ function addConsoleLog(level, args){
   });
 })();
 
-/* Simple EventBus for runtime monitoring */
-const EventBus = (function(){
-  let subs = [];
-  let nextId = 1;
-  function emit(evt){
-    evt = evt || {}; evt.ts = evt.ts || Date.now();
-    subs.forEach(s=>{ try{ if(!s.filter || s.filter(evt)) s.handler(evt); }catch(_e){} });
-  }
-  function subscribe(filter, handler){
-    const id = nextId++;
-    subs.push({id, filter, handler});
-    return id;
-  }
-  function unsubscribe(id){ subs = subs.filter(s=>s.id!==id); }
-  return {emit, subscribe, unsubscribe};
-})();
-
 function scanChunksAndTs(files){
   const findings = [];
   const secretPatterns = [
@@ -395,33 +378,6 @@ if (typeof window !== 'undefined') (function () {
     const blob = new Blob([text], { type:'text/plain;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
-  }
-  function saveJSON(filename, obj){
-    const blob = new Blob([JSON.stringify(obj,null,2)], {type:'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
-  }
-  function truncateBytes(data, max=4096){
-    try{
-      if (typeof data === 'string') return data.length>max ? data.slice(0,max)+'…' : data;
-      if (data && data.byteLength){
-        return data.byteLength>max ? data.slice(0,max) : data;
-      }
-    }catch(_e){}
-    return data;
-  }
-  function redact(str, opts){
-    str = String(str||''); opts = opts || {}; const h = opts.head||32; const t = opts.tail||32;
-    if (str.length <= h+t+1) return str;
-    return str.slice(0,h)+'…'+str.slice(-t);
-  }
-  function createStore(limit=2000){
-    const items = [];
-    return {
-      push(ev){ if(items.length>=limit) items.shift(); items.push(ev); },
-      get(){ return items; },
-      clear(){ items.length = 0; }
-    };
   }
   function getBaseDomain(h){
     h = (h||'').toLowerCase();
@@ -1302,32 +1258,10 @@ jsRefs.copy.onclick=()=>{ const current=jh.findings.filter(f=>f.session===jh.ses
 jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session).map(r=>({file:r.file,line: (typeof r.line==='number'?(r.line+1):''),type:r.type,value:r.value,host:r.host||''})); const head=['file','line','type','value','host']; csvDownload(`js_hunter_${nowStr()}.csv`, head, rows); };
 
 /* ============================
-   Runtime
+   Runtime Secrets
 ============================ */
 const tabRuntime = panel.querySelector('#tab_runtime');
 tabRuntime.innerHTML = `
-  <div class="ptk-tabs" id="rt_tabs">
-    <div class="ptk-tab active" data-rt="network">Network</div>
-    <div class="ptk-tab" data-rt="secrets">Secrets</div>
-  </div>
-  <section id="rt_network"></section>
-  <section id="rt_secrets" style="display:none"></section>
-`;
-const rtTabsEl = tabRuntime.querySelector('#rt_tabs');
-const rtSections = {
-  network: tabRuntime.querySelector('#rt_network'),
-  secrets: tabRuntime.querySelector('#rt_secrets')
-};
-rtTabsEl.addEventListener('click', e=>{
-  const t = e.target.closest('.ptk-tab'); if(!t) return;
-  ['network','secrets'].forEach(n=>{
-    rtSections[n].style.display = n===t.dataset.rt?'' : 'none';
-    rtTabsEl.querySelector(`.ptk-tab[data-rt="${n}"]`).classList.toggle('active', n===t.dataset.rt);
-  });
-});
-
-// existing Runtime Secrets moved to sub-section
-rtSections.secrets.innerHTML = `
   <div class="ptk-box">
     <div class="ptk-flex">
       <div class="ptk-hdr">Runtime Secrets</div>
@@ -1341,64 +1275,12 @@ rtSections.secrets.innerHTML = `
     <div id="rs_results"></div>
   </div>
 `;
-
-// Network sub-tab
-rtSections.network.innerHTML = `
-  <div class="ptk-box">
-    <div class="ptk-flex">
-      <div class="ptk-hdr">Network</div>
-      <div class="ptk-grid">
-        <button id="net_pause" class="ptk-btn">Pausar</button>
-        <button id="net_clear" class="ptk-btn">Clear</button>
-        <button id="net_json" class="ptk-btn">Export JSON</button>
-        <button id="net_csv" class="ptk-btn">Export CSV</button>
-      </div>
-    </div>
-    <div id="net_results"></div>
-  </div>
-`;
-const netStore = createStore(2000);
-let netPaused = false;
-const netRefs = {
-  pause: rtSections.network.querySelector('#net_pause'),
-  clear: rtSections.network.querySelector('#net_clear'),
-  json:  rtSections.network.querySelector('#net_json'),
-  csv:   rtSections.network.querySelector('#net_csv'),
-  results: rtSections.network.querySelector('#net_results')
-};
-function netRender(){
-  netRefs.results.innerHTML = '';
-  netStore.get().forEach((ev,i)=>{
-    const div = document.createElement('div'); div.className='ptk-row';
-    const url = ev.url || '';
-    const top = document.createElement('div'); top.style.opacity='.8';
-    top.textContent = `${i+1} • ${ev.type}`;
-    const code = document.createElement('code'); code.className='ptk-code'; code.style.whiteSpace='pre-wrap';
-    const txt = `${ev.method||''} ${url}\nstatus: ${ev.status} ms:${ev.ms}`;
-    code.textContent = txt;
-    div.appendChild(top); div.appendChild(code);
-    netRefs.results.appendChild(div);
-  });
-}
-netRefs.pause.onclick=()=>{ netPaused=!netPaused; netRefs.pause.textContent=netPaused?'Reanudar':'Pausar'; };
-netRefs.clear.onclick=()=>{ netStore.clear(); netRender(); };
-netRefs.json.onclick=()=>{ saveJSON(`network_${nowStr()}.json`, netStore.get()); };
-netRefs.csv.onclick=()=>{
-  const head=['ts','type','method','url','status','ms'];
-  const rows = netStore.get().map(e=>({ts:e.ts,type:e.type,method:e.method||'',url:e.url||'',status:e.status||'',ms:e.ms||''}));
-  csvDownload(`network_${nowStr()}.csv`, head, rows);
-};
-EventBus.subscribe(ev=>/^(net:|ws:|sse:)/.test(ev.type||''), ev=>{
-  if(netPaused) return;
-  netStore.push(ev);
-  netRender();
-});
 const rsRefs = {
-  clear: rtSections.secrets.querySelector('#rs_clear'),
-  copy:  rtSections.secrets.querySelector('#rs_copy'),
-  dl:    rtSections.secrets.querySelector('#rs_dl'),
-  pmToggle: rtSections.secrets.querySelector('#rs_pm_toggle'),
-  results: rtSections.secrets.querySelector('#rs_results')
+  clear: tabRuntime.querySelector('#rs_clear'),
+  copy:  tabRuntime.querySelector('#rs_copy'),
+  dl:    tabRuntime.querySelector('#rs_dl'),
+  pmToggle: tabRuntime.querySelector('#rs_pm_toggle'),
+  results: tabRuntime.querySelector('#rs_results')
 };
 rsRefs.pmToggle.textContent = capturePostMessage ? 'Pausar postMessage' : 'Reanudar postMessage';
 rsRender = function(){
@@ -2865,21 +2747,13 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.fetch){
     const origFetch = global.fetch;
     global.fetch = async function(...args){
-      const input = args[0];
-      const init = args[1] || {};
-      const url = typeof input==='string'?input:(input&&input.url)||'';
-      const method = (init.method || (input&&input.method) || 'GET').toUpperCase();
-      const start = performance.now();
+      logActivity('fetch', String(args[0]));
       try{
         const res = await origFetch.apply(this, args);
-        const ms = performance.now()-start;
-        EventBus.emit({type:'net:fetch', method, url, status:res.status, ok:res.ok, ms});
-        logActivity('fetch', url);
+        logActivity('fetch-response', res.url || '');
         return res;
       }catch(e){
-        const ms = performance.now()-start;
-        EventBus.emit({type:'net:fetch', method, url, status:0, ok:false, ms});
-        logActivity('fetch-error', url);
+        logActivity('fetch-error', e && e.message || '');
         throw e;
       }
     };
@@ -2891,14 +2765,11 @@ rsRefs.pmToggle.onclick=()=>{
     const origSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function(method, url, ...rest){
       this.__tr_url = url; this.__tr_method = method;
+      logActivity('xhr-open', method + ' ' + url);
       return origOpen.call(this, method, url, ...rest);
     };
     XMLHttpRequest.prototype.send = function(body){
-      const start = performance.now();
-      this.addEventListener('loadend', ()=>{
-        const ms = performance.now()-start;
-        EventBus.emit({type:'net:xhr', method:this.__tr_method, url:this.__tr_url, status:this.status, ok:this.status>=200&&this.status<400, ms});
-      });
+      logActivity('xhr-send', this.__tr_url || '');
       return origSend.call(this, body);
     };
   }
@@ -2907,15 +2778,9 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.WebSocket){
     const OrigWebSocket = global.WebSocket;
     global.WebSocket = function(url, protocols){
+      logActivity('websocket', url);
       const ws = new OrigWebSocket(url, protocols);
-      EventBus.emit({type:'ws:open', url});
-      const origSend = ws.send;
-      ws.send = function(data){
-        EventBus.emit({type:'ws:send', url, data:truncateBytes(String(data))});
-        return origSend.apply(this, arguments);
-      };
-      ws.addEventListener('message', ev=>EventBus.emit({type:'ws:message', url, data:truncateBytes(String(ev.data))}));
-      ws.addEventListener('close', ev=>EventBus.emit({type:'ws:close', url, code:ev.code, reason:ev.reason}));
+      ws.addEventListener('message', ev=>logActivity('ws-message', ev.data));
       return ws;
     };
   }
@@ -2924,9 +2789,9 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.EventSource){
     const OrigEventSource = global.EventSource;
     global.EventSource = function(url, opts){
+      logActivity('eventsource', url);
       const es = new OrigEventSource(url, opts);
-      EventBus.emit({type:'sse:open', url});
-      es.addEventListener('message', ev=>EventBus.emit({type:'sse:message', url, event:ev.type, data:truncateBytes(String(ev.data))}));
+      es.addEventListener('message', ev=>logActivity('es-message', ev.data));
       return es;
     };
   }
@@ -2935,9 +2800,7 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.postMessage){
     const origPostMessage = global.postMessage;
     global.postMessage = function(msg, target, transfer){
-      if (capturePostMessage){
-        try{ EventBus.emit({type:'pm:postMessage', data:truncateBytes(JSON.stringify(msg)), target}); }catch(_e){ EventBus.emit({type:'pm:postMessage', data:'[unserializable]', target}); }
-      }
+      try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
       return origPostMessage.call(this, msg, target, transfer);
     };
   }
@@ -2946,16 +2809,14 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.BroadcastChannel){
     const OrigBC = global.BroadcastChannel;
     global.BroadcastChannel = function(name){
+      logActivity('broadcastchannel', name);
       const bc = new OrigBC(name);
-      EventBus.emit({type:'pm:broadcast', channel:name, data:'[open]'});
       const origBCPost = bc.postMessage;
       bc.postMessage = function(msg){
-        if (capturePostMessage){
-          try{ EventBus.emit({type:'pm:broadcast', channel:name, data:truncateBytes(JSON.stringify(msg))}); }catch(_e){ EventBus.emit({type:'pm:broadcast', channel:name, data:'[unserializable]'}); }
-        }
+        try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
         return origBCPost.call(bc, msg);
       };
-      bc.addEventListener('message', ev=>{ if(capturePostMessage){ try{ EventBus.emit({type:'pm:broadcast', channel:name, data:truncateBytes(JSON.stringify(ev.data))}); }catch(_e){ EventBus.emit({type:'pm:broadcast', channel:name, data:'[unserializable]'}); } } });
+      bc.addEventListener('message', ev=>{ try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); } });
       return bc;
     };
   }

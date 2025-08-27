@@ -367,6 +367,16 @@ if (typeof window !== 'undefined') (function () {
   const IGNORE_EXT = /\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff|woff2?|eot|ttf|otf|css|map|mp4|webm|mp3|wav|ogg|m4a|mov|avi)(\?|#|$)/i;
   const PAGE_LIKE  = /\.(?:html?|php|aspx?|jsp|cfm|md|txt|xml|json)(\?|#|$)/i;
   const SCRIPT_LIKE= /\.(?:js)(\?|#|$)/i;
+  const EVENT_TYPES = Object.freeze({
+    NET: 'net:*',
+    WS: 'ws:*',
+    SSE: 'sse:*',
+    PM: 'pm:*',
+    CODEC: 'codec:*',
+    CRYPTO: 'crypto:*',
+    CONSOLE: 'console:*',
+    ERROR_JS: 'error:js'
+  });
 
   function csvDownload(filename, header, rows) {
     const csv = header.join(',') + '\n' + rows.map(r => header.map(h => escCSV(r[h])).join(',')).join('\n');
@@ -378,6 +388,64 @@ if (typeof window !== 'undefined') (function () {
     const blob = new Blob([text], { type:'text/plain;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+  }
+  function redact(str, {head=32, tail=32} = {}){
+    const s = String(str ?? '');
+    return s.length <= head + tail ? s : s.slice(0, head) + '…' + s.slice(-tail);
+  }
+  function truncateBytes(x, max = 4096){
+    try{
+      if (x == null) return x;
+      if (typeof x === 'string'){
+        if (typeof TextEncoder !== 'undefined' && typeof TextDecoder !== 'undefined'){
+          const enc = new TextEncoder().encode(x);
+          if (enc.length <= max) return x;
+          return new TextDecoder().decode(enc.slice(0, max));
+        }
+        if (typeof Buffer !== 'undefined'){
+          const buf = Buffer.from(x);
+          return buf.length <= max ? x : buf.slice(0, max).toString();
+        }
+        return x.slice(0, max);
+      }
+      if (Array.isArray(x) || ArrayBuffer.isView(x)){
+        return x.length <= max ? x : x.slice(0, max);
+      }
+    }catch(_e){}
+    return x;
+  }
+  function csvFromObjects(rows, cols){
+    return [cols.join(',') , ...rows.map(r => cols.map(c => escCSV(r[c])).join(','))].join('\n');
+  }
+  function saveCSV(rows, filename){
+    if (!Array.isArray(rows) || !rows.length) return;
+    const cols = Object.keys(rows[0]);
+    csvDownload(filename, cols, rows);
+  }
+  function saveJSON(obj, filename){
+    textDownload(filename, JSON.stringify(obj, null, 2));
+  }
+  function makeRingBuffer(max = 2000){
+    const host = (typeof location !== 'undefined' && location.hostname) ? location.hostname : 'global';
+    const key = `rb_${host}`;
+    let buf = [];
+    try{
+      if (typeof GM_getValue === 'function'){
+        buf = JSON.parse(GM_getValue(key, '[]')) || [];
+      }
+    }catch(_e){}
+    function save(){
+      if (typeof GM_setValue === 'function'){
+        try{ GM_setValue(key, JSON.stringify(buf)); }catch(_e){}
+      }
+    }
+    return {
+      push(item){ buf.push(item); if (buf.length > max) buf.splice(0, buf.length - max); save(); },
+      get(i){ return buf[i]; },
+      all(){ return buf.slice(); },
+      clear(){ buf.length = 0; save(); },
+      size(){ return buf.length; }
+    };
   }
   function getBaseDomain(h){
     h = (h||'').toLowerCase();

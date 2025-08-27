@@ -2204,6 +2204,119 @@ rsRefs.pmToggle.onclick=()=>{
 
 
   /* ============================
+     Cookies & Storage inventory
+  ============================ */
+  const tabCookies = panel.querySelector('#tab_security_cookies');
+  const ckTabBtn = panel.querySelector('#tabs_security .ptk-tab[data-tab="cookies"]');
+  tabCookies.innerHTML = `
+    <div class="ptk-box">
+      <div class="ptk-flex">
+        <div class="ptk-hdr">Cookies &amp; Storage Inventory</div>
+        <div class="ptk-grid">
+          <button id="cs_refresh" class="ptk-btn">Refresh</button>
+          <button id="cs_csv" class="ptk-btn">CSV</button>
+          <button id="cs_json" class="ptk-btn">JSON</button>
+        </div>
+      </div>
+      <div id="cs_status" style="margin:6px 0">En espera…</div>
+      <div id="cs_results"></div>
+    </div>
+  `;
+  const csRefs = {
+    refresh: tabCookies.querySelector('#cs_refresh'),
+    csv: tabCookies.querySelector('#cs_csv'),
+    json: tabCookies.querySelector('#cs_json'),
+    status: tabCookies.querySelector('#cs_status'),
+    results: tabCookies.querySelector('#cs_results')
+  };
+  const cs = { cookies: [], ls: [], ss: [], idb: [] };
+  function csUpdateCount(){
+    const total = cs.cookies.length + cs.ls.length + cs.ss.length + cs.idb.length;
+    if (ckTabBtn) ckTabBtn.textContent = `Cookies & Storage (${total})`;
+  }
+  function csPersist(){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_cookies_storage`, JSON.stringify(cs)); }catch(_e){} }
+  function csLoad(){ try{ if(typeof GM_getValue==='function'){ const j=GM_getValue(`${site}_cookies_storage`, 'null'); if(j) Object.assign(cs, JSON.parse(j)); } }catch(_e){} }
+  function cookieRisk(c){ return (!c.secure && String(c.sameSite).toLowerCase()==='none') ? 'SameSite=None sin Secure' : ''; }
+  const RX_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+  const RX_TOKEN = /(token|jwt|bearer)/i;
+  function storageRisk(k,v){ if(RX_JWT.test(v)) return 'JWT'; if(RX_TOKEN.test(k)||RX_TOKEN.test(v)) return 'token'; return ''; }
+  async function scanCookies(){
+    try{
+      if(global.cookieStore && cookieStore.getAll){
+        const list = await cookieStore.getAll();
+        return list.map(c=>({
+          name:c.name, domain:c.domain||location.hostname, path:c.path||'',
+          secure:!!c.secure, httpOnly:!!c.httpOnly, sameSite:c.sameSite||'',
+          risk:cookieRisk(c)
+        }));
+      }
+    }catch(_e){}
+    const out=[]; (document.cookie||'').split(';').forEach(c=>{
+      if(!c) return; const idx=c.indexOf('='); const name=idx>=0?c.slice(0,idx).trim():c.trim();
+      out.push({ name, domain:location.hostname, path:'', secure:location.protocol==='https:', httpOnly:false, sameSite:'', risk:'' });
+    }); return out;
+  }
+  function scanWebStorage(){
+    const ls=[], ss=[];
+    try{
+      for(let i=0;i<localStorage.length;i++){
+        const k=localStorage.key(i); const v=localStorage.getItem(k)||''; const risk=storageRisk(k,v);
+        ls.push({ key:k, size:v.length, preview:v.length>128? v.slice(0,128)+'…':v, risk });
+      }
+    }catch(_e){}
+    try{
+      for(let i=0;i<sessionStorage.length;i++){
+        const k=sessionStorage.key(i); const v=sessionStorage.getItem(k)||''; const risk=storageRisk(k,v);
+        ss.push({ key:k, size:v.length, preview:v.length>128? v.slice(0,128)+'…':v, risk });
+      }
+    }catch(_e){}
+    return {ls, ss};
+  }
+  async function scanIDB(){
+    const names=[]; try{ if(global.indexedDB && indexedDB.databases){ const dbs=await indexedDB.databases(); dbs.forEach(d=>{ if(d && d.name) names.push(d.name); }); } }catch(_e){}
+    return names;
+  }
+  function csRender(){
+    csRefs.results.innerHTML='';
+    const cDiv=document.createElement('div'); cDiv.className='ptk-row';
+    if(cs.cookies.length){
+      let html='<div class="ptk-hdr">Cookies</div><table style="width:100%"><tr><th>Nombre</th><th>Dominio</th><th>Path</th><th>Secure</th><th>HttpOnly</th><th>SameSite</th><th>Riesgo</th></tr>';
+      cs.cookies.forEach(c=>{ html+=`<tr${c.risk?' style="color:#f87171"':''}><td>${escHTML(c.name)}</td><td>${escHTML(c.domain)}</td><td>${escHTML(c.path)}</td><td>${c.secure?'✓':'✗'}</td><td>${c.httpOnly?'✓':'✗'}</td><td>${escHTML(c.sameSite)}</td><td>${escHTML(c.risk)}</td></tr>`; });
+      html+='</table>'; cDiv.innerHTML=html;
+    }else cDiv.innerHTML='<div class="ptk-hdr">Cookies</div><div>No cookies</div>';
+    csRefs.results.appendChild(cDiv);
+    const sDiv=document.createElement('div'); sDiv.className='ptk-row';
+    let sHtml='<div class="ptk-hdr">Web Storage</div>';
+    sHtml+='<div><b>LocalStorage</b></div>';
+    if(cs.ls.length){
+      sHtml+='<table style="width:100%"><tr><th>Clave</th><th>Tamaño</th><th>Preview</th><th>Riesgo</th></tr>';
+      cs.ls.forEach(e=>{ sHtml+=`<tr${e.risk?' style="color:#f87171"':''}><td>${escHTML(e.key)}</td><td>${e.size}</td><td class="ptk-code">${escHTML(e.preview)}</td><td>${escHTML(e.risk)}</td></tr>`; });
+      sHtml+='</table>';
+    }else sHtml+='<div>Vacío</div>';
+    sHtml+='<div><b>SessionStorage</b></div>';
+    if(cs.ss.length){
+      sHtml+='<table style="width:100%"><tr><th>Clave</th><th>Tamaño</th><th>Preview</th><th>Riesgo</th></tr>';
+      cs.ss.forEach(e=>{ sHtml+=`<tr${e.risk?' style="color:#f87171"':''}><td>${escHTML(e.key)}</td><td>${e.size}</td><td class="ptk-code">${escHTML(e.preview)}</td><td>${escHTML(e.risk)}</td></tr>`; });
+      sHtml+='</table>';
+    }else sHtml+='<div>Vacío</div>';
+    sHtml+='<div><b>IndexedDB</b></div>';
+    if(cs.idb.length){ sHtml+='<ul>'+cs.idb.map(n=>`<li>${escHTML(n)}</li>`).join('')+'</ul>'; } else sHtml+='<div>No disponible</div>';
+    sDiv.innerHTML=sHtml; csRefs.results.appendChild(sDiv);
+  }
+  async function csRefresh(){
+    csRefs.status.textContent='Escaneando…';
+    cs.cookies=await scanCookies();
+    const ws=scanWebStorage(); cs.ls=ws.ls; cs.ss=ws.ss;
+    cs.idb=await scanIDB();
+    csRender(); csUpdateCount(); csPersist();
+    csRefs.status.textContent='OK';
+  }
+  csLoad(); csRender(); csUpdateCount();
+  csRefs.refresh.onclick=csRefresh;
+  csRefs.csv.onclick=()=>{ if(cs.cookies.length){ const head=['name','domain','path','secure','httpOnly','sameSite','risk']; csvDownload(`cookies_${nowStr()}.csv`, head, cs.cookies); } };
+  csRefs.json.onclick=()=>{ const out={localStorage:cs.ls, sessionStorage:cs.ss, indexedDB:cs.idb}; textDownload(`storage_${nowStr()}.json`, JSON.stringify(out,null,2)); };
+
+  /* ============================
      OpenAPI/Swagger discovery
   ============================ */
   const tabOA = panel.querySelector('#tab_apis_openapi');

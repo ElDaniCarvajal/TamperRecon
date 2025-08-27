@@ -6,6 +6,7 @@ function addConsoleLog(level, args){
     catch(_e){ return String(a); }
   }).join(' ');
   consoleLogs.push({ time: new Date().toISOString(), level, message: msg });
+  try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:`console:${level}`, message: msg, ts: Date.now() }); }catch(_e){}
   try { renderConsole(); } catch(_e){}
 }
 (function(){
@@ -13,6 +14,14 @@ function addConsoleLog(level, args){
     globalThis.console[level] = (...args)=>addConsoleLog(level, args);
   });
 })();
+
+if (typeof window !== 'undefined' && window.addEventListener){
+  window.addEventListener('error', ev=>{
+    try{
+      if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:js', message:ev.message, stack:ev.error && ev.error.stack, source:ev.filename, line:ev.lineno, col:ev.colno, ts: Date.now() });
+    }catch(_e){}
+  });
+}
 
 function scanChunksAndTs(files){
   const findings = [];
@@ -426,9 +435,9 @@ if (typeof window !== 'undefined') (function () {
   function saveJSON(obj, filename){
     textDownload(filename, JSON.stringify(obj, null, 2));
   }
-  function makeRingBuffer(max = 2000){
+  function makeRingBuffer(name, max = 2000){
     const host = (typeof location !== 'undefined' && location.hostname) ? location.hostname : 'global';
-    const key = `rb_${host}`;
+    const key = `rb_${host}_${name||'default'}`;
     let buf = [];
     try{
       if (typeof GM_getValue === 'function'){
@@ -448,6 +457,89 @@ if (typeof window !== 'undefined') (function () {
       size(){ return buf.length; }
     };
   }
+
+  function ebPreview(val, max = 80){
+    try{
+      if (val === undefined || val === null) return '';
+      if (typeof val === 'string') return val.slice(0, max);
+      if (typeof val === 'object'){
+        if (ArrayBuffer.isView(val)) return Array.from(val.slice ? val.slice(0, max) : new Uint8Array(val).slice(0, max)).join(',');
+        return JSON.stringify(val).slice(0, max);
+      }
+      return String(val).slice(0, max);
+    }catch(_e){ return ''; }
+  }
+  function ebHeadersToObj(h){
+    const o = {};
+    try{
+      if (!h) return o;
+      if (typeof h.forEach === 'function') h.forEach((v,k)=>o[k]=v);
+      else if (Array.isArray(h)) h.forEach(([k,v])=>o[k]=v);
+      else if (typeof h === 'object') Object.keys(h).forEach(k=>o[k]=h[k]);
+    }catch(_e){}
+    return o;
+  }
+  function ebParseHeaders(str){
+    const o = {};
+    if (!str) return o;
+    try{
+      str.trim().split(/\r?\n/).forEach(line=>{
+        const idx = line.indexOf(':');
+        if (idx>0){ const k=line.slice(0,idx).trim().toLowerCase(); const v=line.slice(idx+1).trim(); o[k]=v; }
+      });
+    }catch(_e){}
+    return o;
+  }
+  function ebIsJSON(str){
+    try{ JSON.parse(str); return true; }catch(_e){ return false; }
+  }
+  function ebIsJWT(str){
+    return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(str||'');
+  }
+
+  // Event schemas:
+  // net:fetch/xhr {type,phase,method,url,status,ok,ms,reqHeaders,resHeaders,reqBody,resBody,ts}
+  // ws:* {type,url,data,code?,reason?,ts}
+  // sse:message {type,url,event,data,ts}
+  // pm:* {type,origin?,target?,channel?,data,ts}
+  // codec:* {type,inputPreview,outputPreview,length,isJSON?,isJWT?,ts}
+  // crypto:* {type,alg?,keyPreview?,ivPreview?,length?,sample?,ts}
+  // console:*/error:js {type,message,stack?,source?,line?,col?,ts}
+
+  const TREventBus = (()=>{
+    let subId = 0;
+    const subs = [];
+    const buffers = {
+      net:    makeRingBuffer('net',2000),
+      ws:     makeRingBuffer('ws',2000),
+      sse:    makeRingBuffer('sse',2000),
+      pm:     makeRingBuffer('pm',2000),
+      codec:  makeRingBuffer('codec',2000),
+      crypto: makeRingBuffer('crypto',2000),
+      console:makeRingBuffer('console',2000)
+    };
+    function match(pat, type){
+      if (pat === '*' ) return true;
+      if (pat.endsWith('*')) return type.startsWith(pat.slice(0,-1));
+      return pat === type;
+    }
+    function emit(ev){
+      try{ ev.ts = ev.ts || Date.now(); }catch(_e){}
+      const root = (ev.type||'').split(':')[0];
+      const buf = buffers[root];
+      if (buf) buf.push(ev);
+      subs.forEach(s=>{ if (match(s.type, ev.type) && (!s.filter || s.filter(ev))) try{ s.cb(ev); }catch(_e){} });
+    }
+    function subscribe(type, cb, filter){
+      const id = ++subId; subs.push({id,type,cb,filter}); return id;
+    }
+    function unsubscribe(id){
+      const i = subs.findIndex(s=>s.id===id); if (i>=0) subs.splice(i,1);
+    }
+    return { emit, subscribe, unsubscribe, buffers };
+  })();
+  globalThis.TREventBus = TREventBus;
+  globalThis.TREventBuffers = TREventBus.buffers;
   function getBaseDomain(h){
     h = (h||'').toLowerCase();
     const parts = h.split('.').filter(Boolean);
@@ -3688,12 +3780,27 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.fetch){
     const origFetch = global.fetch;
     global.fetch = async function(...args){
+      const input = args[0]; const init = args[1] || {};
+      const method = (init && init.method) || (input && input.method) || 'GET';
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const start = Date.now();
+      const reqHeaders = ebHeadersToObj(init.headers || (input && input.headers));
+      const reqBody = init && init.body;
+      TREventBus.emit({ type:'net:fetch', phase:'start', method, url, status:0, ok:false, ms:0, reqHeaders, resHeaders:{}, reqBody:ebPreview(reqBody), resBody:'', ts:start });
       logActivity('fetch', String(args[0]));
       try{
         const res = await origFetch.apply(this, args);
+        let resHeaders = {};
+        try{ res.headers.forEach((v,k)=>resHeaders[k]=v); }catch(_e){}
+        let resBody = '';
+        try{ resBody = await res.clone().text(); }catch(_e){}
+        const ms = Date.now() - start;
+        TREventBus.emit({ type:'net:fetch', phase:'end', method, url, status:res.status, ok:res.ok, ms, reqHeaders, resHeaders, reqBody:ebPreview(reqBody), resBody:ebPreview(resBody), ts:Date.now() });
         logActivity('fetch-response', res.url || '');
         return res;
       }catch(e){
+        const ms = Date.now() - start;
+        TREventBus.emit({ type:'net:fetch', phase:'error', method, url, status:0, ok:false, ms, reqHeaders, resHeaders:{}, reqBody:ebPreview(reqBody), resBody:String(e), ts:Date.now() });
         logActivity('fetch-error', e && e.message || '');
         throw e;
       }
@@ -3705,11 +3812,19 @@ rsRefs.pmToggle.onclick=()=>{
     const origOpen = XMLHttpRequest.prototype.open;
     const origSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function(method, url, ...rest){
-      this.__tr_url = url; this.__tr_method = method;
+      this.__tr_url = url; this.__tr_method = method; this.__tr_start = Date.now();
+      TREventBus.emit({ type:'net:xhr', phase:'start', method, url, status:0, ok:false, ms:0, reqHeaders:{}, resHeaders:{}, reqBody:'', resBody:'', ts:this.__tr_start });
       logActivity('xhr-open', method + ' ' + url);
       return origOpen.call(this, method, url, ...rest);
     };
     XMLHttpRequest.prototype.send = function(body){
+      this.__tr_body = body;
+      const xhr = this;
+      xhr.addEventListener('loadend', function(){
+        const ms = Date.now() - (xhr.__tr_start || Date.now());
+        const resHeaders = ebParseHeaders(xhr.getAllResponseHeaders ? xhr.getAllResponseHeaders() : '');
+        TREventBus.emit({ type:'net:xhr', phase:'end', method:xhr.__tr_method || '', url:xhr.__tr_url || '', status:xhr.status, ok:(xhr.status>=200 && xhr.status<300), ms, reqHeaders:{}, resHeaders, reqBody:ebPreview(xhr.__tr_body), resBody:ebPreview(xhr.response), ts:Date.now() });
+      });
       logActivity('xhr-send', this.__tr_url || '');
       return origSend.call(this, body);
     };
@@ -3719,9 +3834,22 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.WebSocket){
     const OrigWebSocket = global.WebSocket;
     global.WebSocket = function(url, protocols){
-      logActivity('websocket', url);
       const ws = new OrigWebSocket(url, protocols);
-      ws.addEventListener('message', ev=>logActivity('ws-message', ev.data));
+      ws.__tr_url = url;
+      TREventBus.emit({ type:'ws:open', url, data:undefined, ts:Date.now() });
+      logActivity('websocket', url);
+      const origSend = ws.send;
+      ws.send = function(data){
+        TREventBus.emit({ type:'ws:send', url:ws.__tr_url, data:ebPreview(data), ts:Date.now() });
+        return origSend.call(ws, data);
+      };
+      ws.addEventListener('message', ev=>{
+        TREventBus.emit({ type:'ws:message', url:ws.__tr_url, data:ebPreview(ev.data), ts:Date.now() });
+        logActivity('ws-message', ev.data);
+      });
+      ws.addEventListener('close', ev=>{
+        TREventBus.emit({ type:'ws:close', url:ws.__tr_url, code:ev.code, reason:ev.reason, ts:Date.now() });
+      });
       return ws;
     };
   }
@@ -3730,9 +3858,12 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.EventSource){
     const OrigEventSource = global.EventSource;
     global.EventSource = function(url, opts){
-      logActivity('eventsource', url);
       const es = new OrigEventSource(url, opts);
-      es.addEventListener('message', ev=>logActivity('es-message', ev.data));
+      logActivity('eventsource', url);
+      es.addEventListener('message', ev=>{
+        TREventBus.emit({ type:'sse:message', url, event:ev.type, data:ebPreview(ev.data), ts:Date.now() });
+        logActivity('es-message', ev.data);
+      });
       return es;
     };
   }
@@ -3741,9 +3872,17 @@ rsRefs.pmToggle.onclick=()=>{
   if (global.postMessage){
     const origPostMessage = global.postMessage;
     global.postMessage = function(msg, target, transfer){
+      try{
+        TREventBus.emit({ type:'pm:post', origin:(location && location.origin)||'', target:String(target), data:ebPreview(msg), ts:Date.now() });
+      }catch(_e){}
       try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
       return origPostMessage.call(this, msg, target, transfer);
     };
+    if (global.addEventListener){
+      global.addEventListener('message', ev=>{
+        try{ TREventBus.emit({ type:'pm:message', origin:ev.origin, data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+      });
+    }
   }
 
   // BroadcastChannel
@@ -3752,12 +3891,17 @@ rsRefs.pmToggle.onclick=()=>{
     global.BroadcastChannel = function(name){
       logActivity('broadcastchannel', name);
       const bc = new OrigBC(name);
+      TREventBus.emit({ type:'pm:bc-open', channel:name, data:null, ts:Date.now() });
       const origBCPost = bc.postMessage;
       bc.postMessage = function(msg){
+        try{ TREventBus.emit({ type:'pm:bc-post', channel:name, data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
         try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
         return origBCPost.call(bc, msg);
       };
-      bc.addEventListener('message', ev=>{ try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); } });
+      bc.addEventListener('message', ev=>{
+        try{ TREventBus.emit({ type:'pm:bc-msg', channel:name, data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+        try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); }
+      });
       return bc;
     };
   }
@@ -3774,7 +3918,9 @@ rsRefs.pmToggle.onclick=()=>{
     const origAtob = global.atob;
     global.atob = function(str){
       logActivity('atob', str);
-      return origAtob.call(this, str);
+      const out = origAtob.call(this, str);
+      TREventBus.emit({ type:'codec:atob', inputPreview:ebPreview(str,100), outputPreview:ebPreview(out,100), length:out.length, isJSON:ebIsJSON(out), isJWT:ebIsJWT(str), ts:Date.now() });
+      return out;
     };
   }
 
@@ -3787,20 +3933,40 @@ rsRefs.pmToggle.onclick=()=>{
       td.decode = function(...dargs){
         const res = origDecode.apply(td, dargs);
         logActivity('textdecoder', res);
+        TREventBus.emit({ type:'codec:decode', inputPreview:ebPreview(dargs[0],100), outputPreview:ebPreview(res,100), length:res.length||0, isJSON:ebIsJSON(res), isJWT:ebIsJWT(res), ts:Date.now() });
         return res;
       };
       return td;
     };
   }
 
-  // crypto.subtle.exportKey
-  if (global.crypto && global.crypto.subtle && global.crypto.subtle.exportKey){
-    const origExportKey = global.crypto.subtle.exportKey.bind(global.crypto.subtle);
-    global.crypto.subtle.exportKey = async function(format, key){
-      const res = await origExportKey(format, key);
-      logActivity('exportKey', format);
-      return res;
-    };
+  // crypto.subtle
+  if (global.crypto && global.crypto.subtle){
+    const s = global.crypto.subtle;
+    ['encrypt','decrypt','digest'].forEach(op=>{
+      if (typeof s[op] === 'function'){
+        const orig = s[op].bind(s);
+        s[op] = async function(...args){
+          const alg = args[0];
+          const res = await orig(...args);
+          let len = res && (res.byteLength || res.length) || 0;
+          let sample = '';
+          try{ sample = ebPreview(new Uint8Array(res).slice(0,16)); }catch(_e){}
+          TREventBus.emit({ type:`crypto:${op}`, alg: (alg && alg.name)||String(alg), length: len, sample, ts:Date.now() });
+          return res;
+        };
+      }
+    });
+    if (s.exportKey){
+      const origExportKey = s.exportKey.bind(s);
+      s.exportKey = async function(format, key){
+        const res = await origExportKey(format, key);
+        let len = res && (res.byteLength || res.length) || 0;
+        TREventBus.emit({ type:'crypto:exportKey', alg:format, length:len, sample:ebPreview(res,80), ts:Date.now() });
+        logActivity('exportKey', format);
+        return res;
+      };
+    }
   }
 
   // storage & JWT
@@ -3844,5 +4010,5 @@ rsRefs.pmToggle.onclick=()=>{
 })(typeof window !== 'undefined' ? window : globalThis);
 
 if (typeof module !== 'undefined' && module.exports){
-  module.exports = { TRCore: globalThis.TRCore, TRRecon: globalThis.TRRecon, TRMonitor: globalThis.TRMonitor };
+  module.exports = { TRCore: globalThis.TRCore, TRRecon: globalThis.TRRecon, TRMonitor: globalThis.TRMonitor, TREventBus: globalThis.TREventBus, TREventBuffers: globalThis.TREventBuffers };
 }

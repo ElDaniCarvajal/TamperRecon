@@ -523,6 +523,7 @@ if (typeof window !== 'undefined') (function () {
         <div class="ptk-tab" data-tab="hard">Hardening</div>
         <div class="ptk-tab" data-tab="console">Console</div>
         <div class="ptk-tab" data-tab="errors">Errors</div>
+        <div class="ptk-tab" data-tab="settings">Settings</div>
       </div>
       <section id="tab_files"></section>
       <section id="tab_js" style="display:none"></section>
@@ -534,6 +535,7 @@ if (typeof window !== 'undefined') (function () {
       <section id="tab_hard" style="display:none"></section>
       <section id="tab_console" style="display:none"></section>
       <section id="tab_errors" style="display:none"></section>
+      <section id="tab_settings" style="display:none"></section>
       `;
   root.appendChild(panel);
 
@@ -588,7 +590,7 @@ if (typeof window !== 'undefined') (function () {
   updateConsoleBadge();
   updateErrorBadge();
   function showTab(name){
-      ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','console','errors'].forEach(t=>{
+      ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','console','errors','settings'].forEach(t=>{
       panel.querySelector('#tab_'+t).style.display = (t===name)?'':'none';
       const tabBtn = tabsEl.querySelector(`.ptk-tab[data-tab="${t}"]`);
       if (tabBtn) tabBtn.classList.toggle('active', t===name);
@@ -1117,37 +1119,7 @@ function jsProcessCapture(src, headers, body){
   if (body) jsScanCaptured(src+' [body]', body);
   jsRender();
 }
-const _origFetch = window.fetch;
-window.fetch = async function(...args){
-  const res = await _origFetch.apply(this,args);
-  if (jsRefs.captureNet && jsRefs.captureNet.checked){
-    try {
-      const url = typeof args[0]==='string'? args[0] : (args[0] && args[0].url) || '';
-      logEvent('network', { method:'fetch', url });
-      const clone = res.clone();
-      const hdrs = Array.from(clone.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n');
-      withTimeout(clone.text(), JS.TIMEOUT_MS)
-        .then(body=>jsProcessCapture('fetch '+url,hdrs,body))
-        .catch(e=>logError(e));
-    } catch(e){ logError(e); }
-  }
-  return res;
-};
-const _origSend = XMLHttpRequest.prototype.send;
-XMLHttpRequest.prototype.send = function(...args){
-  this.addEventListener('load', function(){
-    if (jsRefs.captureNet && jsRefs.captureNet.checked){
-      try {
-        const hdrs = this.getAllResponseHeaders();
-        const body = this.responseText || '';
-        const url = this.responseURL || '';
-        logEvent('network', { method:'xhr', url });
-        jsProcessCapture('xhr '+url,hdrs,body);
-      } catch(e){ logError(e); }
-    }
-  });
-  return _origSend.apply(this,args);
-};
+// network hooks moved to Settings-controlled hooks
 
 // === jsScanText (dominios solo en strings/comentarios + anti-ruido en minificados externos) ===
 function jsScanText(file, text) {
@@ -1355,61 +1327,7 @@ rsRefs.pmToggle.onclick=()=>{
     }catch(e){ logError(e); }
   })();
 
-  // Hook WebSocket send/receive
-  (function(){
-    const OrigWS = window.WebSocket;
-    if (typeof OrigWS === 'function'){
-      window.WebSocket = function(...args){
-        const ws = new OrigWS(...args);
-        try{
-          const url = args[0];
-          addRuntimeLog({ type:'WS.connect', data:String(url||'') });
-          const origSend = ws.send;
-          ws.send = function(data){
-            try{ addRuntimeLog({ type:'WS.send', data:String(data) }); }catch(e){ logError(e); }
-            return origSend.apply(this, arguments);
-          };
-          ws.addEventListener && ws.addEventListener('message', ev=>{
-            try{ addRuntimeLog({ type:'WS.recv', data:String(ev.data) }); }catch(e){ logError(e); }
-          });
-        }catch(e){ logError(e); }
-        return ws;
-      };
-    }
-  })();
-
-  // Hook EventSource messages
-  (function(){
-    const OrigES = window.EventSource;
-    if (typeof OrigES === 'function'){
-      window.EventSource = function(...args){
-        const es = new OrigES(...args);
-        try{
-          const url = args[0];
-          addRuntimeLog({ type:'SSE.connect', data:String(url||'') });
-          es.addEventListener && es.addEventListener('message', ev=>{
-            try{ addRuntimeLog({ type:'SSE.message', data:String(ev.data) }); }catch(e){ logError(e); }
-          });
-        }catch(e){ logError(e); }
-        return es;
-      };
-    }
-  })();
-
-  // Hook postMessage send/receive
-  (function(){
-    const origPM = window.postMessage;
-    if (typeof origPM === 'function'){
-      const serialize = msg => { try{ return typeof msg === 'string' ? msg : JSON.stringify(msg); }catch(e){ logError(e); return String(msg); } };
-      window.postMessage = function(message, targetOrigin, transfer){
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.send', data:serialize(message) }); }catch(e){ logError(e); }
-        return origPM.apply(this, arguments);
-      };
-      window.addEventListener && window.addEventListener('message', ev=>{
-        try{ if (capturePostMessage) addRuntimeLog({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin }); }catch(e){ logError(e); }
-      });
-    }
-  })();
+  // runtime hooks moved to Settings-controlled hooks
 
   // Scan globals, Web Storage and cookies for secrets
   (function(){
@@ -2420,6 +2338,54 @@ rsRefs.pmToggle.onclick=()=>{
     });
     tabHard.querySelector('#hd_clear').addEventListener('click',()=>{ hdRefs.results.innerHTML=''; });
 
+    const tabSettings = panel.querySelector('#tab_settings');
+    tabSettings.innerHTML = `
+      <div class="ptk-row"><label><input type="checkbox" id="set_fetch"> fetch</label></div>
+      <div class="ptk-row"><label><input type="checkbox" id="set_xhr"> XMLHttpRequest</label></div>
+      <div class="ptk-row"><label><input type="checkbox" id="set_ws"> WebSocket</label></div>
+      <div class="ptk-row"><label><input type="checkbox" id="set_es"> EventSource/SSE</label></div>
+      <div class="ptk-row"><label><input type="checkbox" id="set_pm"> postMessage</label></div>
+      <div class="ptk-row"><label><input type="checkbox" id="set_atob"> atob</label></div>
+      <div class="ptk-row"><label><input type="checkbox" id="set_td"> TextDecoder</label></div>
+      <div class="ptk-row"><label><input type="checkbox" id="set_crypto"> crypto.subtle</label></div>
+      <div class="ptk-row"><button id="set_unhook" class="ptk-btn">Unhook</button></div>
+    `;
+    setTimeout(()=>{
+      const setRefs = {
+        fetch: tabSettings.querySelector('#set_fetch'),
+        xhr: tabSettings.querySelector('#set_xhr'),
+        ws: tabSettings.querySelector('#set_ws'),
+        es: tabSettings.querySelector('#set_es'),
+        pm: tabSettings.querySelector('#set_pm'),
+        atob: tabSettings.querySelector('#set_atob'),
+        td: tabSettings.querySelector('#set_td'),
+        crypto: tabSettings.querySelector('#set_crypto'),
+        unhook: tabSettings.querySelector('#set_unhook')
+      };
+      const gmGet = (k,d)=>{ try{ return typeof GM_getValue==='function'?GM_getValue(k,d):JSON.parse(localStorage.getItem(k)) ?? d; }catch(_e){ return d; } };
+      const gmSet = (k,v)=>{ try{ if (typeof GM_setValue==='function') GM_setValue(k,v); else localStorage.setItem(k,JSON.stringify(v)); }catch(_e){} };
+      const hooks = globalThis.__PTK_HOOKS || {};
+      Object.entries(setRefs).forEach(([name, el])=>{
+        if (name==='unhook' || !hooks[name]) return;
+        const key='ptk_hook_'+name;
+        const enabled=!!gmGet(key,false);
+        el.checked=enabled;
+        if (enabled && hooks[name].enable) hooks[name].enable();
+        el.addEventListener('change',()=>{
+          gmSet(key, el.checked);
+          if (el.checked) hooks[name].enable && hooks[name].enable(); else hooks[name].disable && hooks[name].disable();
+        });
+      });
+      setRefs.unhook.addEventListener('click',()=>{
+        Object.entries(hooks).forEach(([name,hk])=>{
+          if (hk.disable) hk.disable();
+          const key='ptk_hook_'+name;
+          gmSet(key,false);
+          if (setRefs[name]) setRefs[name].checked=false;
+        });
+      });
+    },0);
+
     /* ============================
        AUTOSTARTS (opcionales)
     ============================ */
@@ -2478,60 +2444,7 @@ rsRefs.pmToggle.onclick=()=>{
     return obj;
   }
 
-  const origFetch = global.fetch;
-  if (typeof origFetch === 'function'){
-    global.fetch = async function(input, init){
-      const url = (typeof input === 'string') ? input : (input && input.url) || '';
-      const method = (init && init.method) || (input && input.method) || 'GET';
-      const reqHdrs = headersToObj((init && init.headers) || (input && input.headers));
-      const reqBody = (init && init.body) || '';
-      const start = performance.now();
-      const res = await origFetch.apply(this, arguments);
-      const end = performance.now();
-      const clone = res.clone();
-      const resHdrs = headersToObj(clone.headers);
-      const text = await clone.text().catch(()=> '');
-      push({
-        type:'fetch',
-        url, method,
-        request:{ headers:reqHdrs, body:reqBody },
-        response:{ status:res.status, headers:resHdrs, body:text, size:text.length },
-        time:end-start
-      });
-      return res;
-    };
-  }
-
-  const origXHROpen = XMLHttpRequest.prototype.open;
-  const origXHRSend = XMLHttpRequest.prototype.send;
-  const origXHRSetHdr = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.open = function(method, url){
-    this._tr_method = method;
-    this._tr_url = url;
-    this._tr_headers = {};
-    return origXHROpen.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.setRequestHeader = function(k,v){
-    this._tr_headers[k]=v;
-    return origXHRSetHdr.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function(body){
-    const start = performance.now();
-    this.addEventListener('loadend', ()=>{
-      const end = performance.now();
-      try{
-        push({
-          type:'xhr',
-          url:this._tr_url,
-          method:this._tr_method,
-          request:{ headers:this._tr_headers, body:body || '' },
-          response:{ status:this.status, headers:parseHeaders(this.getAllResponseHeaders()), body:this.responseText, size:(this.responseText||'').length },
-          time:end-start
-        });
-      }catch(e){ logError(e); }
-    });
-    return origXHRSend.apply(this, arguments);
-  };
+  // hooks moved to Settings-controlled module
   function parseHeaders(str){
     const out={};
     (str||'').trim().split(/\r?\n/).forEach(line=>{
@@ -2540,93 +2453,6 @@ rsRefs.pmToggle.onclick=()=>{
     });
     return out;
   }
-
-  const OrigWS = global.WebSocket;
-  if (typeof OrigWS === 'function'){
-    global.WebSocket = function(...args){
-      const ws = new OrigWS(...args);
-      const url = args[0];
-      push({ type:'ws.connect', url });
-      const origSend = ws.send;
-      ws.send = function(data){
-        push({ type:'ws.send', url, data:String(data) });
-        return origSend.apply(this, arguments);
-      };
-      ws.addEventListener('message', ev=>{
-        push({ type:'ws.recv', url, data:String(ev.data) });
-      });
-      return ws;
-    };
-  }
-
-  const OrigES = global.EventSource;
-  if (typeof OrigES === 'function'){
-    global.EventSource = function(...args){
-      const es = new OrigES(...args);
-      const url = args[0];
-      push({ type:'es.connect', url });
-      es.addEventListener('message', ev=>{
-        push({ type:'es.message', url, data:String(ev.data) });
-      });
-      return es;
-    };
-  }
-
-  (function(){
-    const origPM = global.postMessage;
-    if (typeof origPM === 'function'){
-      global.postMessage = function(msg, targetOrigin, transfer){
-        detect('postMessage.send', msg, { target: targetOrigin });
-        return origPM.apply(this, arguments);
-      };
-      global.addEventListener('message', ev=>{
-        detect('postMessage.receive', ev.data, { origin: ev.origin });
-      });
-    }
-  })();
-
-  (function(){
-    const OrigBC = global.BroadcastChannel;
-    if (typeof OrigBC === 'function'){
-      global.BroadcastChannel = function(name){
-        const bc = new OrigBC(name);
-        bc.addEventListener('message', ev=>{
-          detect('broadcast.receive', ev.data, { channel: name });
-        });
-        const origPost = bc.postMessage;
-        bc.postMessage = function(data){
-          detect('broadcast.send', data, { channel: name });
-          return origPost.apply(this, arguments);
-        };
-        return bc;
-      };
-    }
-  })();
-
-  function detect(type, data, extra){
-    try{
-      const str = typeof data === 'string' ? data : JSON.stringify(data);
-      const matches = dangerPatterns.filter(rx=>rx.test(str)).map(rx=>rx.source);
-      push(Object.assign({ type, data:str, matches }, extra||{}));
-    }catch(e){ logError(e); }
-  }
-
-  async function scanServiceWorkers(){
-    if (!('serviceWorker' in navigator)) return;
-    try{
-      const regs = await navigator.serviceWorker.getRegistrations();
-      for (const reg of regs){
-        const url = reg.active && reg.active.scriptURL;
-        let text = '';
-        if (url){
-          try{ text = await fetch(url).then(r=>r.text()); }catch(_e){}
-        }
-        const hasCachePut = /cache\.put|caches\.open/gi.test(text);
-        push({ type:'serviceWorker', url, hasCachePut, size:text.length });
-      }
-    }catch(e){ logError(e); }
-  }
-  scanServiceWorkers();
 
   function exportJSON(){
     return JSON.stringify(getRecords(), null, 2);
@@ -2742,125 +2568,186 @@ rsRefs.pmToggle.onclick=()=>{
     activity.push(entry);
     try{ addConsoleLog('log', ['[TR]', type, detail]); }catch(_e){}
   }
-
-  // fetch
-  if (global.fetch){
-    const origFetch = global.fetch;
-    global.fetch = async function(...args){
-      logActivity('fetch', String(args[0]));
-      try{
-        const res = await origFetch.apply(this, args);
-        logActivity('fetch-response', res.url || '');
-        return res;
-      }catch(e){
-        logActivity('fetch-error', e && e.message || '');
-        throw e;
+  const HOOKS = {
+    fetch: {
+      orig: null,
+      enable(){
+        if (this.orig || !global.fetch) return;
+        this.orig = global.fetch;
+        const origFetch = this.orig;
+        global.fetch = async function(...args){
+          logActivity('fetch', String(args[0]));
+          try{
+            const res = await origFetch.apply(this, args);
+            logActivity('fetch-response', res.url || '');
+            return res;
+          }catch(e){
+            logActivity('fetch-error', e && e.message || '');
+            throw e;
+          }
+        };
+      },
+      disable(){
+        if (!this.orig) return;
+        global.fetch = this.orig;
+        this.orig = null;
       }
-    };
-  }
+    },
+    xhr: {
+      origOpen:null,
+      origSend:null,
+      enable(){
+        if (this.origOpen || !global.XMLHttpRequest) return;
+        this.origOpen = XMLHttpRequest.prototype.open;
+        this.origSend = XMLHttpRequest.prototype.send;
+        const self = this;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest){
+          this.__tr_url = url; this.__tr_method = method;
+          logActivity('xhr-open', method + ' ' + url);
+          return self.origOpen.call(this, method, url, ...rest);
+        };
+        XMLHttpRequest.prototype.send = function(body){
+          logActivity('xhr-send', this.__tr_url || '');
+          return self.origSend.call(this, body);
+        };
+      },
+      disable(){
+        if (!this.origOpen) return;
+        XMLHttpRequest.prototype.open = this.origOpen;
+        XMLHttpRequest.prototype.send = this.origSend;
+        this.origOpen = this.origSend = null;
+      }
+    },
+    ws: {
+      orig:null,
+      enable(){
+        if (this.orig || !global.WebSocket) return;
+        const OrigWebSocket = global.WebSocket;
+        this.orig = OrigWebSocket;
+        global.WebSocket = function(url, protocols){
+          logActivity('websocket', url);
+          try{ addRuntimeLog({ type:'WS.connect', data:String(url||'') }); }catch(_e){}
+          const ws = new OrigWebSocket(url, protocols);
+          const origSend = ws.send;
+          ws.send = function(data){
+            try{ addRuntimeLog({ type:'WS.send', data:String(data) }); }catch(_e){}
+            return origSend.apply(this, arguments);
+          };
+          ws.addEventListener('message', ev=>{ try{ addRuntimeLog({ type:'WS.recv', data:String(ev.data) }); }catch(_e){} logActivity('ws-message', ev.data); });
+          return ws;
+        };
+      },
+      disable(){
+        if (!this.orig) return;
+        global.WebSocket = this.orig;
+        this.orig = null;
+      }
+    },
+    es: {
+      orig:null,
+      enable(){
+        if (this.orig || !global.EventSource) return;
+        const OrigEventSource = global.EventSource;
+        this.orig = OrigEventSource;
+        global.EventSource = function(url, opts){
+          logActivity('eventsource', url);
+          try{ addRuntimeLog({ type:'SSE.connect', data:String(url||'') }); }catch(_e){}
+          const es = new OrigEventSource(url, opts);
+          es.addEventListener('message', ev=>{ try{ addRuntimeLog({ type:'SSE.message', data:String(ev.data) }); }catch(_e){} logActivity('es-message', ev.data); });
+          return es;
+        };
+      },
+      disable(){
+        if (!this.orig) return;
+        global.EventSource = this.orig;
+        this.orig = null;
+      }
+    },
+    pm: {
+      orig:null,
+      handler:null,
+      enable(){
+        if (this.orig || !global.postMessage) return;
+        const origPost = global.postMessage;
+        this.orig = origPost;
+        const serialize = msg => { try{ return typeof msg==='string'?msg:JSON.stringify(msg); }catch(e){ logError(e); return String(msg); } };
+        global.postMessage = function(message, targetOrigin, transfer){
+          if (capturePostMessage){ try{ addRuntimeLog({ type:'postMessage.send', data:serialize(message) }); }catch(e){ logError(e); } }
+          try{ logActivity('postMessage', JSON.stringify(message)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
+          return origPost.call(this, message, targetOrigin, transfer);
+        };
+        const handler = ev=>{ if (capturePostMessage){ try{ addRuntimeLog({ type:'postMessage.receive', data:serialize(ev.data), origin: ev.origin }); }catch(e){ logError(e); } } };
+        global.addEventListener('message', handler, true);
+        this.handler = handler;
+      },
+      disable(){
+        if (!this.orig) return;
+        global.postMessage = this.orig;
+        if (this.handler) global.removeEventListener('message', this.handler, true);
+        this.orig = null; this.handler = null;
+      }
+    },
+    atob: {
+      orig:null,
+      enable(){
+        if (this.orig || !global.atob) return;
+        const origAtob = global.atob;
+        this.orig = origAtob;
+        global.atob = function(str){
+          logActivity('atob', str);
+          return origAtob.call(this, str);
+        };
+      },
+      disable(){
+        if (!this.orig) return;
+        global.atob = this.orig;
+        this.orig = null;
+      }
+    },
+    td: {
+      orig:null,
+      enable(){
+        if (this.orig || !global.TextDecoder) return;
+        const OrigTD = global.TextDecoder;
+        this.orig = OrigTD;
+        global.TextDecoder = function(...args){
+          const td = new OrigTD(...args);
+          const origDecode = td.decode;
+          td.decode = function(...dargs){
+            const res = origDecode.apply(td, dargs);
+            logActivity('textdecoder', res);
+            return res;
+          };
+          return td;
+        };
+      },
+      disable(){
+        if (!this.orig) return;
+        global.TextDecoder = this.orig;
+        this.orig = null;
+      }
+    },
+    crypto: {
+      orig:null,
+      enable(){
+        if (this.orig || !(global.crypto && global.crypto.subtle && global.crypto.subtle.exportKey)) return;
+        const origExportKey = global.crypto.subtle.exportKey.bind(global.crypto.subtle);
+        this.orig = origExportKey;
+        global.crypto.subtle.exportKey = async function(format, key){
+          const res = await origExportKey(format, key);
+          logActivity('exportKey', format);
+          return res;
+        };
+      },
+      disable(){
+        if (!this.orig) return;
+        if (global.crypto && global.crypto.subtle) global.crypto.subtle.exportKey = this.orig;
+        this.orig = null;
+      }
+    }
+  };
 
-  // XMLHttpRequest
-  if (global.XMLHttpRequest){
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest){
-      this.__tr_url = url; this.__tr_method = method;
-      logActivity('xhr-open', method + ' ' + url);
-      return origOpen.call(this, method, url, ...rest);
-    };
-    XMLHttpRequest.prototype.send = function(body){
-      logActivity('xhr-send', this.__tr_url || '');
-      return origSend.call(this, body);
-    };
-  }
-
-  // WebSocket
-  if (global.WebSocket){
-    const OrigWebSocket = global.WebSocket;
-    global.WebSocket = function(url, protocols){
-      logActivity('websocket', url);
-      const ws = new OrigWebSocket(url, protocols);
-      ws.addEventListener('message', ev=>logActivity('ws-message', ev.data));
-      return ws;
-    };
-  }
-
-  // EventSource
-  if (global.EventSource){
-    const OrigEventSource = global.EventSource;
-    global.EventSource = function(url, opts){
-      logActivity('eventsource', url);
-      const es = new OrigEventSource(url, opts);
-      es.addEventListener('message', ev=>logActivity('es-message', ev.data));
-      return es;
-    };
-  }
-
-  // postMessage
-  if (global.postMessage){
-    const origPostMessage = global.postMessage;
-    global.postMessage = function(msg, target, transfer){
-      try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
-      return origPostMessage.call(this, msg, target, transfer);
-    };
-  }
-
-  // BroadcastChannel
-  if (global.BroadcastChannel){
-    const OrigBC = global.BroadcastChannel;
-    global.BroadcastChannel = function(name){
-      logActivity('broadcastchannel', name);
-      const bc = new OrigBC(name);
-      const origBCPost = bc.postMessage;
-      bc.postMessage = function(msg){
-        try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
-        return origBCPost.call(bc, msg);
-      };
-      bc.addEventListener('message', ev=>{ try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); } });
-      return bc;
-    };
-  }
-
-  // Service Workers
-  if (global.navigator && global.navigator.serviceWorker){
-    global.navigator.serviceWorker.getRegistrations().then(regs=>{
-      regs.forEach(reg=>logActivity('serviceWorker', reg.active && reg.active.scriptURL || ''));
-    }).catch(e=>logActivity('sw-error', e && e.message || ''));
-  }
-
-  // atob
-  if (global.atob){
-    const origAtob = global.atob;
-    global.atob = function(str){
-      logActivity('atob', str);
-      return origAtob.call(this, str);
-    };
-  }
-
-  // TextDecoder
-  if (global.TextDecoder){
-    const OrigTD = global.TextDecoder;
-    global.TextDecoder = function(...args){
-      const td = new OrigTD(...args);
-      const origDecode = td.decode;
-      td.decode = function(...dargs){
-        const res = origDecode.apply(td, dargs);
-        logActivity('textdecoder', res);
-        return res;
-      };
-      return td;
-    };
-  }
-
-  // crypto.subtle.exportKey
-  if (global.crypto && global.crypto.subtle && global.crypto.subtle.exportKey){
-    const origExportKey = global.crypto.subtle.exportKey.bind(global.crypto.subtle);
-    global.crypto.subtle.exportKey = async function(format, key){
-      const res = await origExportKey(format, key);
-      logActivity('exportKey', format);
-      return res;
-    };
-  }
+  global.__PTK_HOOKS = HOOKS;
 
   // storage & JWT
   function analyzeJWT(token){

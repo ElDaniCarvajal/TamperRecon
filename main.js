@@ -6,14 +6,22 @@ const WRAP_FLAG = '__TR_WRAPPED__';
 const __trOrig = new WeakMap();
 function addConsoleLog(level, args, extra){
   if(!liveConsole) return;
-  const msg = args.map(a => {
-    try { return typeof a === 'string' ? a : JSON.stringify(a); }
-    catch(_e){ return String(a); }
-  }).join(' ');
   let stack = extra && extra.stack;
   let source = extra && extra.source;
   let line = extra && extra.line;
   let col = extra && extra.col;
+  let msg = '';
+  let err = null;
+  for(const a of args){
+    if(a && typeof a==='object' && 'message' in a){ err = a; break; }
+  }
+  if(err){
+    msg = err.message || String(err);
+    if(!stack) stack = err.stack;
+    try{ if(err.__trLogged) return; err.__trLogged=true; }catch(_e){}
+  } else {
+    msg = args.map(a=>{ try{ return typeof a==='string'?a:JSON.stringify(a); }catch(_e){ return String(a); }}).join(' ');
+  }
   if (!stack){ try{ stack = new Error().stack; }catch(_e){} }
   if (stack){
     const lines = String(stack).split('\n');
@@ -27,7 +35,7 @@ function addConsoleLog(level, args, extra){
       }
     }
   }
-  const key = `${level}|${msg}|${source||''}|${line||''}|${col||''}|${stack||''}`;
+  const key = `${msg}|${stack||''}`;
   if (consoleLogKeys.has(key)) return;
   consoleLogKeys.add(key);
   const rec = { id: Date.now().toString(36)+Math.random().toString(36).slice(2), ts: Date.now(), time: new Date().toISOString(), level, message: msg, stack, source, line, col };
@@ -45,17 +53,18 @@ function addConsoleLog(level, args, extra){
 
 if (typeof window !== 'undefined' && window.addEventListener){
   window.addEventListener('error', ev=>{
-    try{ addConsoleLog('error', [ev.message], { stack: ev.error && ev.error.stack, source: ev.filename, line: ev.lineno, col: ev.colno }); if(ev.error) ev.error.__trLogged=true; }catch(_e){}
-    try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:js', message:ev.message, stack:ev.error && ev.error.stack, source:ev.filename, line:ev.lineno, col:ev.colno, ts: Date.now() }); }catch(_e){}
+    const err = ev.error;
+    const msg = err && err.message || ev.message;
+    try{ addConsoleLog('error', [err || msg], { stack: err && err.stack, source: ev.filename, line: ev.lineno, col: ev.colno }); }catch(_e){}
+    try{ if(err) err.__trLogged=true; }catch(_e){}
+    try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:js', message:msg, stack:err && err.stack, source:ev.filename, line:ev.lineno, col:ev.colno, ts: Date.now() }); }catch(_e){}
   });
   window.addEventListener('unhandledrejection', ev=>{
-    let msg = ''; let stack = ''; const r = ev.reason;
-    if (r && typeof r === 'object'){
-      msg = r.message || JSON.stringify(r);
-      stack = r.stack;
-      try{ r.__trLogged = true; }catch(_e){}
-    } else msg = String(r);
-    try{ addConsoleLog('error', [msg], { stack }); }catch(_e){}
+    const r = ev.reason;
+    try{ addConsoleLog('error', [r]); }catch(_e){}
+    let msg='', stack='';
+    if(r && typeof r==='object'){ msg=r.message||JSON.stringify(r); stack=r.stack; }
+    else msg=String(r);
     try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:js', message:msg, stack, ts: Date.now() }); }catch(_e){}
   });
 }
@@ -2402,6 +2411,7 @@ tabCE.innerHTML = `
         <button id="ce_json" class="ptk-btn">JSON</button>
         <button id="ce_csv" class="ptk-btn">CSV</button>
         <button id="ce_md" class="ptk-btn">Pinned MD</button>
+        <button id="ce_export" class="ptk-btn">Export</button>
       </div>
     </div>
     <div style="max-height:200px;overflow:auto">
@@ -2419,6 +2429,7 @@ const ceRefs = {
   json: tabCE.querySelector('#ce_json'),
   csv: tabCE.querySelector('#ce_csv'),
   md: tabCE.querySelector('#ce_md'),
+  export: tabCE.querySelector('#ce_export'),
   rows: tabCE.querySelector('#ce_rows')
 };
 function ceFiltered(){
@@ -2430,13 +2441,15 @@ function ceFiltered(){
     return true;
   });
 }
+function ceLevelColor(l){ return l==='error'? '#ef4444' : l==='warn'? '#facc15' : '#cbd5e1'; }
 renderCE = function(){
   const list = ceFiltered();
   renderChunked(list, ceRefs.rows, rec=>{
     const src = rec.source ? `${rec.source}:${rec.line||''}:${rec.col||''}` : '';
     const stack = rec.stack ? `<details><summary>ver</summary><pre class="ptk-code">${escHTML(rec.stack)}</pre></details>` : '';
+    const badge = `<span class="ptk-chip" style="color:${ceLevelColor(rec.level)}">${escHTML(rec.level)}</span>`;
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.level)}</td><td>${escHTML(rec.message)}</td><td>${escHTML(src)}</td><td>${stack}</td><td></td>`;
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${badge}</td><td>${escHTML(rec.message)}</td><td>${escHTML(src)}</td><td>${stack}</td><td></td>`;
     const actions=tr.lastElementChild;
     const copy=document.createElement('button'); copy.className='ptk-btn'; copy.textContent='Copy';
     copy.onclick=()=>{ clip(JSON.stringify(rec,null,2)); copy.textContent='¡Copiado!'; setTimeout(()=>copy.textContent='Copy',1200); };
@@ -2453,6 +2466,7 @@ ceRefs.clear.onclick=()=>{ consoleLogs.length=0; consoleLogKeys.clear(); renderC
 ceRefs.json.onclick=()=>{ const out=JSON.stringify(ceFiltered(),null,2); clip(out); ceRefs.json.textContent='¡Copiado!'; setTimeout(()=>ceRefs.json.textContent='JSON',1200); };
 ceRefs.csv.onclick=()=>{ const head=['ts','level','message','source','line','col','stack']; const rows=ceFiltered().map(r=>({ts:new Date(r.ts).toISOString(),level:r.level,message:r.message,source:r.source||'',line:r.line||'',col:r.col||'',stack:r.stack||''})); csvDownload(`console_${nowStr()}.csv`, head, rows); };
 ceRefs.md.onclick=()=>{ const cols=['ts','level','message','source','stack']; const rows=cePins.map(r=>({ts:new Date(r.ts).toISOString(),level:r.level,message:r.message,source:r.source||'',stack:r.stack||''})); clip(rowsToMarkdown(rows,cols)); ceRefs.md.textContent='¡Copiado!'; setTimeout(()=>ceRefs.md.textContent='Pinned MD',1200); };
+ceRefs.export.onclick=()=>{ saveJSON(consoleLogs, `console_${nowStr()}.json`); };
 try{ if(typeof GM_getValue==='function'){ ceRefs.level.value=GM_getValue(`${site}_ce_level`, ''); ceRefs.txt.value=GM_getValue(`${site}_ce_txt`, ''); } }catch(_e){}
 renderCE();
 

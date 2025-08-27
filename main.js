@@ -1166,6 +1166,7 @@ if (typeof window !== 'undefined') (function () {
       <div class="ptk-hdr">Pentest Toolkit — ${location.hostname}</div>
       <div class="ptk-grid"><button id="ptk_toggle" class="ptk-btn">Ocultar</button></div>
     </div>
+    <div id="ptk_connect_alerts"></div>
       <div class="ptk-tabs" id="top_tabs">
         <div class="ptk-tab" data-tab="discover">Discover</div>
         <div class="ptk-tab" data-tab="apis">APIs</div>
@@ -1278,6 +1279,53 @@ if (typeof window !== 'undefined') (function () {
       </div>
       `;
   root.appendChild(panel);
+
+  const PTK_CONNECT_KEY = 'ptk_connect_' + location.hostname;
+  let ptkConnectHidden = new Set();
+  try {
+    if (typeof GM_getValue === 'function') {
+      ptkConnectHidden = new Set(JSON.parse(GM_getValue(PTK_CONNECT_KEY, '[]')));
+    }
+  } catch (_e) {}
+  const ptkConnectShown = new Set();
+  function ptkConnectSave() {
+    try { if (typeof GM_setValue === 'function') GM_setValue(PTK_CONNECT_KEY, JSON.stringify([...ptkConnectHidden])); } catch (_e) {}
+  }
+  function ptkShowConnect(host) {
+    if (!host || ptkConnectHidden.has(host) || ptkConnectShown.has(host)) return;
+    ptkConnectShown.add(host);
+    const cont = panel.querySelector('#ptk_connect_alerts');
+    if (!cont) return;
+    const row = document.createElement('div');
+    row.className = 'ptk-row';
+    row.innerHTML = `<div class="ptk-flex"><div>Falta @connect ${escHTML(host)}</div><div class="ptk-grid"><button class="ptk-btn" data-copy>Copiar directiva</button><button class="ptk-btn" data-close>×</button></div></div>`;
+    cont.appendChild(row);
+    row.querySelector('[data-copy]').addEventListener('click', () => clip(`// @connect ${host}`));
+    row.querySelector('[data-close]').addEventListener('click', () => { row.remove(); ptkConnectHidden.add(host); ptkConnectSave(); });
+  }
+  if (typeof GM_xmlhttpRequest === 'function') {
+    const origGM = GM_xmlhttpRequest;
+    GM_xmlhttpRequest = function (details) {
+      const url = details && details.url;
+      const origErr = details.onerror;
+      const origEnd = details.onloadend;
+      details.onerror = function (res) {
+        const msg = (res && (res.error || res.message)) || '';
+        if (/network|blocked/i.test(String(msg))) {
+          try { const h = new URL(url, location.href).host; ptkShowConnect(h); } catch (_e) {}
+        }
+        if (typeof origErr === 'function') { try { origErr(res); } catch (_e) {} }
+      };
+      details.onloadend = function (res) {
+        const msg = (res && (res.error || res.message)) || '';
+        if (res && res.status === 0 && /network|blocked/i.test(String(msg))) {
+          try { const h = new URL(url, location.href).host; ptkShowConnect(h); } catch (_e) {}
+        }
+        if (typeof origEnd === 'function') { try { origEnd(res); } catch (_e) {} }
+      };
+      return origGM(details);
+    };
+  }
 
   const pill = document.createElement('div');
   pill.className = 'ptk-wrap';

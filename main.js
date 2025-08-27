@@ -35,6 +35,7 @@ function addConsoleLog(level, args, extra){
       }
     }
   }
+  msg = truncateBytes(msg);
   const key = `${msg}|${stack||''}`;
   if (consoleLogKeys.has(key)) return;
   consoleLogKeys.add(key);
@@ -450,22 +451,28 @@ if (typeof window !== 'undefined') (function () {
     return s.length <= head + tail ? s : s.slice(0, head) + '…' + s.slice(-tail);
   }
   function truncateBytes(x, max = 4096){
+    const LIMIT = 512 * 1024;
     try{
       if (x == null) return x;
       if (typeof x === 'string'){
         if (typeof TextEncoder !== 'undefined' && typeof TextDecoder !== 'undefined'){
           const enc = new TextEncoder().encode(x);
+          if (enc.length > LIMIT) return '[truncated: >512KB]';
           if (enc.length <= max) return x;
           return new TextDecoder().decode(enc.slice(0, max));
         }
         if (typeof Buffer !== 'undefined'){
           const buf = Buffer.from(x);
+          if (buf.length > LIMIT) return '[truncated: >512KB]';
           return buf.length <= max ? x : buf.slice(0, max).toString();
         }
+        if (x.length > LIMIT) return '[truncated: >512KB]';
         return x.slice(0, max);
       }
-      if (Array.isArray(x) || ArrayBuffer.isView(x)){
-        return x.length <= max ? x : x.slice(0, max);
+      if (Array.isArray(x) || ArrayBuffer.isView(x) || x instanceof ArrayBuffer){
+        const len = x.length || x.byteLength || 0;
+        if (len > LIMIT) return '[truncated: >512KB]';
+        return len <= max ? x : (x.slice ? x.slice(0, max) : x);
       }
     }catch(_e){}
     return x;
@@ -483,7 +490,12 @@ if (typeof window !== 'undefined') (function () {
   }
   function ringPush(arr, item, max = 2000){
     arr.push(item);
-    if (arr.length > max) arr.splice(0, arr.length - max);
+    if (arr.length > max){
+      const removed = arr.length - max;
+      arr.splice(0, removed);
+      arr.__maxed = (arr.__maxed || 0) + removed;
+      try{ if(typeof updateLiveChips==='function') updateLiveChips(); }catch(_e){}
+    }
   }
   function rowsToMarkdown(rows, cols){
     if (!rows.length) return '';
@@ -506,35 +518,53 @@ if (typeof window !== 'undefined') (function () {
   function makeRingBuffer(name, max = 2000){
     const host = (typeof location !== 'undefined' && location.hostname) ? location.hostname : 'global';
     const key = `rb_${host}_${name||'default'}`;
+    const keyMax = key + '_maxed';
     let buf = [];
+    let maxed = 0;
     try{
       if (typeof GM_getValue === 'function'){
         buf = JSON.parse(GM_getValue(key, '[]')) || [];
+        maxed = Number(GM_getValue(keyMax, 0)) || 0;
       }
     }catch(_e){}
     function save(){
       if (typeof GM_setValue === 'function'){
-        try{ GM_setValue(key, JSON.stringify(buf)); }catch(_e){}
+        try{ GM_setValue(key, JSON.stringify(buf)); GM_setValue(keyMax, String(maxed)); }catch(_e){}
       }
     }
     return {
-      push(item){ buf.push(item); if (buf.length > max) buf.splice(0, buf.length - max); save(); },
+      push(item){
+        buf.push(item);
+        if (buf.length > max){
+          const removed = buf.length - max;
+          buf.splice(0, removed);
+          maxed += removed;
+          try{ if(typeof updateLiveChips==='function') updateLiveChips(); }catch(_e){}
+        }
+        save();
+      },
       get(i){ return buf[i]; },
       all(){ return buf.slice(); },
-      clear(){ buf.length = 0; save(); },
-      size(){ return buf.length; }
+      clear(){ buf.length = 0; maxed = 0; save(); },
+      size(){ return buf.length; },
+      get maxed(){ return maxed; }
     };
   }
 
   function ebPreview(val, max = 80){
     try{
       if (val === undefined || val === null) return '';
-      if (typeof val === 'string') return val.slice(0, max);
-      if (typeof val === 'object'){
-        if (ArrayBuffer.isView(val)) return Array.from(val.slice ? val.slice(0, max) : new Uint8Array(val).slice(0, max)).join(',');
-        return JSON.stringify(val).slice(0, max);
+      if (typeof val === 'string') return truncateBytes(val, max);
+      if (ArrayBuffer.isView(val)){
+        const slice = val.slice ? val.slice(0, max) : new Uint8Array(val).slice(0, max);
+        return Array.from(slice).join(',');
       }
-      return String(val).slice(0, max);
+      if (val instanceof ArrayBuffer){
+        const slice = val.slice(0, max);
+        return Array.from(new Uint8Array(slice)).join(',');
+      }
+      if (typeof val === 'object') return truncateBytes(JSON.stringify(val), max);
+      return truncateBytes(String(val), max);
     }catch(_e){ return ''; }
   }
   function ebSize(val){
@@ -608,8 +638,7 @@ if (typeof window !== 'undefined') (function () {
       crypto: makeRingBuffer('crypto',2000),
       console:makeRingBuffer('console',2000)
     };
-    let evtCount=0, lastTick=0, sampling=false, sampleCount=0;
-    const SAMPLE_THRESHOLD=200;
+    let evtTimes=[], sampling=false, sampleCount=0;
     function match(pat, type){
       if (pat === '*' ) return true;
       if (pat.endsWith('*')) return type.startsWith(pat.slice(0,-1));
@@ -618,9 +647,12 @@ if (typeof window !== 'undefined') (function () {
     function emit(ev){
       try{ ev.ts = ev.ts || Date.now(); }catch(_e){}
       const now=Date.now();
-      if(now-lastTick>1000){ lastTick=now; evtCount=0; sampleCount=0; sampling=false; }
-      evtCount++;
-      if(evtCount>SAMPLE_THRESHOLD){ sampling=true; sampleCount++; if(sampleCount%5!==0) return; }
+      evtTimes.push(now);
+      while(evtTimes.length && now - evtTimes[0] > 10000) evtTimes.shift();
+      const shouldSample = evtTimes.length > 1000;
+      if(shouldSample && !sampling){ sampling=true; sampleCount=0; }
+      else if(!shouldSample && sampling){ sampling=false; sampleCount=0; }
+      if(sampling){ sampleCount++; if(sampleCount%5!==0) return; }
       const root = (ev.type||'').split(':')[0];
       const buf = buffers[root];
       if (buf) buf.push(ev);
@@ -695,7 +727,7 @@ if (typeof window !== 'undefined') (function () {
   let runtimeAlerted = false;
   let capturePostMessage = false;
   function logEvent(type, details){
-    eventLogs.push(Object.assign({ time: new Date().toISOString(), type }, details));
+    ringPush(eventLogs, Object.assign({ time: new Date().toISOString(), type }, details));
   }
   function addRuntimeLog(rec){
     if(!liveGlobals){
@@ -877,7 +909,7 @@ if (typeof window !== 'undefined') (function () {
         rec.type = typeof val;
         rec.preview = globalsPreview(val);
       }
-      globalsList.push(rec);
+      ringPush(globalsList, rec);
       cnt++;
       if(cnt>=GLOBALS_TICK_LIMIT) break;
     }
@@ -1479,12 +1511,23 @@ if (typeof window !== 'undefined') (function () {
     if (runtimeGlobalsLabel) runtimeGlobalsLabel.textContent = `Globals/Vars (${liveGlobals ? globalsList.length : 0})`;
   };
   function updateLiveChips(){
-    if(runtimeNetChip) runtimeNetChip.textContent = liveNet ? 'Live: ON' : 'Live: OFF';
-    if(runtimeMsgChip) runtimeMsgChip.textContent = liveMsg ? 'Live: ON' : 'Live: OFF';
-    if(runtimeCodecChip) runtimeCodecChip.textContent = liveCodec ? 'Live: ON' : 'Live: OFF';
-    if(runtimeCryptoChip) runtimeCryptoChip.textContent = liveCrypto ? 'Live: ON' : 'Live: OFF';
-    if(runtimeConsoleChip) runtimeConsoleChip.textContent = liveConsole ? 'Live: ON' : 'Live: OFF';
-    if(runtimeGlobalsChip) runtimeGlobalsChip.textContent = liveGlobals ? 'Live: ON' : 'Live: OFF';
+    const maxedTotal=(arr,name)=>{
+      let n = (arr && arr.__maxed) || 0;
+      try{ if(globalThis.TREventBuffers && globalThis.TREventBuffers[name]) n += globalThis.TREventBuffers[name].maxed; }catch(_e){}
+      return n;
+    };
+    const txt=(live,arr,name)=>{
+      let t = live ? 'Live: ON' : 'Live: OFF';
+      const m = maxedTotal(arr,name);
+      if(m) t += ` | buffer maxed ${m}`;
+      return t;
+    };
+    if(runtimeNetChip) runtimeNetChip.textContent = txt(liveNet, netLogs, 'net');
+    if(runtimeMsgChip) runtimeMsgChip.textContent = txt(liveMsg, msgLogs, 'pm');
+    if(runtimeCodecChip) runtimeCodecChip.textContent = txt(liveCodec, codecLogs, 'codec');
+    if(runtimeCryptoChip) runtimeCryptoChip.textContent = txt(liveCrypto, cryptoLogs, 'crypto');
+    if(runtimeConsoleChip) runtimeConsoleChip.textContent = txt(liveConsole, consoleLogs, 'console');
+    if(runtimeGlobalsChip) runtimeGlobalsChip.textContent = txt(liveGlobals, globalsList, 'globals');
   }
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${liveConsole ? consoleLogs.length : 0})`;
@@ -2268,7 +2311,7 @@ rsRender = function(){
   });
 };
 rsRender();
-rsRefs.clear.onclick=()=>{ runtimeLogs.length=0; rsRender(); updateRuntimeBadge(); };
+rsRefs.clear.onclick=()=>{ runtimeLogs.length=0; runtimeLogs.__maxed=0; rsRender(); updateRuntimeBadge(); updateLiveChips(); };
 rsRefs.copy.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); clip(out); rsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>rsRefs.copy.textContent='Copiar JSON',1200); };
 rsRefs.dl.onclick=()=>{
   const data = { logs: runtimeLogs, globals: getAllGlobals() };
@@ -2369,7 +2412,7 @@ netRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`
 netRefs.host.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_host`, netRefs.host.value); }catch(_e){}; netRender(); };
 netRefs.method.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_method`, netRefs.method.value); }catch(_e){}; netRender(); };
 netRefs.status.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_status`, netRefs.status.value); }catch(_e){}; netRender(); };
-netRefs.clear.onclick=()=>{ netLogs.length=0; netRender(); updateRuntimeBadge(); };
+netRefs.clear.onclick=()=>{ netLogs.length=0; netLogs.__maxed=0; netRender(); updateRuntimeBadge(); updateLiveChips(); };
 netRefs.pause.onclick=()=>{ netPaused=!netPaused; netRefs.pause.textContent=netPaused?'Reanudar':'Pausar'; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_net_paused`, netPaused); }catch(_e){}; };
 netRefs.json.onclick=()=>{ const out=JSON.stringify(netFiltered(),null,2); clip(out); netRefs.json.textContent='¡Copiado!'; setTimeout(()=>netRefs.json.textContent='JSON',1200); };
 netRefs.csv.onclick=()=>{ const head=['ts','type','method','url','status','ms','size']; const rows=netFiltered().map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,method:r.method,url:r.url,status:r.status,ms:r.ms,size:r.size})); csvDownload(`network_${nowStr()}.csv`, head, rows); };
@@ -2435,7 +2478,7 @@ msgRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`
 msgRefs.channel.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_channel`, msgRefs.channel.value); }catch(_e){}; msgRender(); };
 msgRefs.origin.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_origin`, msgRefs.origin.value); }catch(_e){}; msgRender(); };
 msgRefs.target.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_target`, msgRefs.target.value); }catch(_e){}; msgRender(); };
-msgRefs.clear.onclick=()=>{ msgLogs.length=0; msgRender(); updateRuntimeBadge(); };
+msgRefs.clear.onclick=()=>{ msgLogs.length=0; msgLogs.__maxed=0; msgRender(); updateRuntimeBadge(); updateLiveChips(); };
 msgRefs.pause.onclick=()=>{ msgPaused=!msgPaused; msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_paused`, msgPaused); }catch(_e){}; };
 msgRefs.json.onclick=()=>{ const rows=msgFiltered().map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); clip(JSON.stringify(rows,null,2)); msgRefs.json.textContent='¡Copiado!'; setTimeout(()=>msgRefs.json.textContent='JSON',1200); };
 msgRefs.csv.onclick=()=>{ const head=['ts','channel','type','origin','target','size','preview']; const rows=msgFiltered().map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); csvDownload(`messaging_${nowStr()}.csv`, head, rows); };
@@ -2497,7 +2540,7 @@ codecRender = function(){
     return tr;
   }, '<tr><td colspan="8">Sin datos</td></tr>');
 };
-cdRefs.clear.onclick=()=>{ codecLogs.length=0; codecRender(); updateRuntimeBadge(); };
+cdRefs.clear.onclick=()=>{ codecLogs.length=0; codecLogs.__maxed=0; codecRender(); updateRuntimeBadge(); updateLiveChips(); };
 cdRefs.json.onclick=()=>{ const out=JSON.stringify(codecLogs,null,2); clip(out); cdRefs.json.textContent='¡Copiado!'; setTimeout(()=>cdRefs.json.textContent='JSON',1200); };
 cdRefs.csv.onclick=()=>{ const head=['ts','codec','length','isJSON','isJWT','input','output']; const rows=codecLogs.map(r=>({ts:new Date(r.ts).toISOString(),codec:r.codec,length:r.length,isJSON:r.isJSON,isJWT:r.isJWT,input:r.inputFull,output:r.outputFull})); csvDownload(`codecs_${nowStr()}.csv`, head, rows); };
 cdRefs.md.onclick=()=>{ const cols=['ts','codec','length','isJSON','isJWT','input','output']; const rows=cdPins.map(r=>({ts:new Date(r.ts).toISOString(),codec:r.codec,length:r.length,isJSON:r.isJSON,isJWT:r.isJWT,input:r.inputFull,output:r.outputFull})); clip(rowsToMarkdown(rows,cols)); cdRefs.md.textContent='¡Copiado!'; setTimeout(()=>cdRefs.md.textContent='Pinned MD',1200); };
@@ -2575,7 +2618,7 @@ renderCE = function(){
 };
 ceRefs.level.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_ce_level`, ceRefs.level.value); }catch(_e){}; renderCE(); };
 ceRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_ce_txt`, ceRefs.txt.value); }catch(_e){}; renderCE(); };
-ceRefs.clear.onclick=()=>{ consoleLogs.length=0; consoleLogKeys.clear(); renderCE(); renderConsole(); };
+ceRefs.clear.onclick=()=>{ consoleLogs.length=0; consoleLogs.__maxed=0; consoleLogKeys.clear(); renderCE(); renderConsole(); updateLiveChips(); };
 ceRefs.json.onclick=()=>{ const out=JSON.stringify(ceFiltered(),null,2); clip(out); ceRefs.json.textContent='¡Copiado!'; setTimeout(()=>ceRefs.json.textContent='JSON',1200); };
 ceRefs.csv.onclick=()=>{ const head=['ts','level','message','source','line','col','stack']; const rows=ceFiltered().map(r=>({ts:new Date(r.ts).toISOString(),level:r.level,message:r.message,source:r.source||'',line:r.line||'',col:r.col||'',stack:r.stack||''})); csvDownload(`console_${nowStr()}.csv`, head, rows); };
 ceRefs.md.onclick=()=>{ const cols=['ts','level','message','source','stack']; const rows=cePins.map(r=>({ts:new Date(r.ts).toISOString(),level:r.level,message:r.message,source:r.source||'',stack:r.stack||''})); clip(rowsToMarkdown(rows,cols)); ceRefs.md.textContent='¡Copiado!'; setTimeout(()=>ceRefs.md.textContent='Pinned MD',1200); };
@@ -2624,7 +2667,7 @@ cryptoRender = function(){
     return tr;
   }, '<tr><td colspan="8">Sin datos</td></tr>');
 };
-cyRefs.clear.onclick=()=>{ cryptoLogs.length=0; cryptoRender(); updateRuntimeBadge(); };
+cyRefs.clear.onclick=()=>{ cryptoLogs.length=0; cryptoLogs.__maxed=0; cryptoRender(); updateRuntimeBadge(); updateLiveChips(); };
 cyRefs.json.onclick=()=>{ const out=JSON.stringify(cryptoLogs,null,2); clip(out); cyRefs.json.textContent='¡Copiado!'; setTimeout(()=>cyRefs.json.textContent='JSON',1200); };
 cyRefs.csv.onclick=()=>{ const head=['ts','type','alg','keyPreview','ivPreview','length','sample']; const rows=cryptoLogs.map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,alg:r.alg,keyPreview:r.keyPreview,ivPreview:r.ivPreview,length:r.length,sample:r.sample})); csvDownload(`crypto_${nowStr()}.csv`, head, rows); };
 cyRefs.md.onclick=()=>{ const cols=['ts','type','alg','keyPreview','ivPreview','length','sample']; const rows=cryptoPins.map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,alg:r.alg,keyPreview:r.keyPreview,ivPreview:r.ivPreview,length:r.length,sample:r.sample})); clip(rowsToMarkdown(rows,cols)); cyRefs.md.textContent='¡Copiado!'; setTimeout(()=>cyRefs.md.textContent='Pinned MD',1200); };
@@ -2687,7 +2730,7 @@ globalsRender = function(){
     return tr;
   }, '<tr><td colspan="4">Sin datos</td></tr>');
 };
-glRefs.clear.onclick=()=>{ globalsList.length=0; globalsRender(); updateRuntimeBadge(); };
+glRefs.clear.onclick=()=>{ globalsList.length=0; globalsList.__maxed=0; globalsRender(); updateRuntimeBadge(); updateLiveChips(); };
 glRefs.json.onclick=()=>{ const out=JSON.stringify(globalsList.map(r=>r.name),null,2); clip(out); glRefs.json.textContent='¡Copiado!'; setTimeout(()=>glRefs.json.textContent='JSON',1200); };
 globalsRender();
 updateRuntimeBadge();

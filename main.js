@@ -469,6 +469,17 @@ if (typeof window !== 'undefined') (function () {
       return String(val).slice(0, max);
     }catch(_e){ return ''; }
   }
+  function ebSize(val){
+    try{
+      if (val === undefined || val === null) return 0;
+      if (typeof val === 'string') return val.length;
+      if (typeof val === 'object'){
+        if (ArrayBuffer.isView(val) || val instanceof ArrayBuffer) return val.byteLength || val.length || 0;
+        return JSON.stringify(val).length;
+      }
+      return String(val).length;
+    }catch(_e){ return 0; }
+  }
   function ebHeadersToObj(h){
     const o = {};
     try{
@@ -636,6 +647,33 @@ if (typeof window !== 'undefined') (function () {
     try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:'network', data:rec, ts:Date.now() }); }catch(_e){}
     try{ netRender(); }catch(_e){}
   }
+
+  const msgLogs = [];
+  let msgRender = ()=>{};
+  let msgPaused = false;
+  let msgSeq = 0;
+  function addMsgLog(rec){
+    if(msgPaused) return;
+    rec.id = ++msgSeq;
+    msgLogs.push(rec);
+    logEvent('messaging', rec);
+    updateRuntimeBadge();
+    try{ msgRender(); }catch(_e){}
+  }
+  function handlePmEvent(ev){
+    const type = (ev.type||'').split(':')[1] || '';
+    const rec = {
+      ts: ev.ts || Date.now(),
+      channel: ev.channel || 'postMessage',
+      type,
+      origin: ev.origin || '',
+      target: ev.target || '',
+      size: ev.size || 0,
+      preview: ev.data || ''
+    };
+    addMsgLog(rec);
+  }
+  try{ if(globalThis.TREventBus){ if(globalThis.TREventBuffers && globalThis.TREventBuffers.pm) globalThis.TREventBuffers.pm.all().forEach(handlePmEvent); globalThis.TREventBus.subscribe('pm:*', handlePmEvent); } }catch(_e){}
 
   const origFetch = window.fetch;
   if (origFetch) window.fetch = function(input, init){
@@ -827,7 +865,29 @@ if (typeof window !== 'undefined') (function () {
           <div class="ptk-tab" data-tab="globals">Globals/Vars (0)</div>
         </div>
         <section id="tab_runtime_network"></section>
-        <section id="tab_runtime_messaging" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_messaging" style="display:none">
+          <div class="ptk-box">
+            <div class="ptk-flex">
+              <div class="ptk-hdr">Messaging</div>
+              <div class="ptk-grid">
+                <input id="msg_txt" class="ptk-input" placeholder="Texto" style="width:80px">
+                <input id="msg_channel" class="ptk-input" placeholder="Canal" style="width:100px">
+                <input id="msg_origin" class="ptk-input" placeholder="Origin" style="width:100px">
+                <input id="msg_target" class="ptk-input" placeholder="Target" style="width:100px">
+                <button id="msg_pause" class="ptk-btn">Pausar</button>
+                <button id="msg_clear" class="ptk-btn">Clear</button>
+                <button id="msg_json" class="ptk-btn">JSON</button>
+                <button id="msg_csv" class="ptk-btn">CSV</button>
+              </div>
+            </div>
+            <div style="max-height:200px;overflow:auto">
+              <table style="width:100%;border-collapse:collapse">
+                <thead><tr><th>ts</th><th>canal/tipo</th><th>origin</th><th>target</th><th>size</th><th>preview</th></tr></thead>
+                <tbody id="msg_rows"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
         <section id="tab_runtime_codecs" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_runtime_crypto" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_runtime_console" style="display:none"><div class="ptk-row">Placeholder</div></section>
@@ -929,11 +989,13 @@ if (typeof window !== 'undefined') (function () {
   const showRuntimeTab = initTabs('runtime', ['network','messaging','codecs','crypto','console','globals'], panel.querySelector('#top_runtime'));
 
   const reportTabsEl = panel.querySelector('#tabs');
-  const runtimeTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="network"]');
+  const runtimeNetTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="network"]');
+  const runtimeMsgTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="messaging"]');
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
-    if (runtimeTabBtn) runtimeTabBtn.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
+    if (runtimeNetTabBtn) runtimeNetTabBtn.textContent = `Network (${runtimeLogs.length + netLogs.length})`;
+    if (runtimeMsgTabBtn) runtimeMsgTabBtn.textContent = `Messaging (${msgLogs.length})`;
   };
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
@@ -1756,6 +1818,53 @@ netRefs.json.onclick=()=>{ const out=JSON.stringify(netFiltered(),null,2); clip(
 netRefs.csv.onclick=()=>{ const head=['ts','type','method','url','status','ms','size']; const rows=netFiltered().map(r=>({ts:new Date(r.ts).toISOString(),type:r.type,method:r.method,url:r.url,status:r.status,ms:r.ms,size:r.size})); csvDownload(`network_${nowStr()}.csv`, head, rows); };
 try{ if(typeof GM_getValue==='function'){ netRefs.txt.value=GM_getValue(`${site}_net_txt`, ''); netRefs.host.value=GM_getValue(`${site}_net_host`, ''); netRefs.method.value=GM_getValue(`${site}_net_method`, ''); netRefs.status.value=GM_getValue(`${site}_net_status`, ''); netPaused=GM_getValue(`${site}_net_paused`, false); netRefs.pause.textContent=netPaused?'Reanudar':'Pausar'; } }catch(_e){}
 netRender();
+
+const tabMessaging = panel.querySelector('#tab_runtime_messaging');
+const msgRefs = {
+  txt: tabMessaging.querySelector('#msg_txt'),
+  channel: tabMessaging.querySelector('#msg_channel'),
+  origin: tabMessaging.querySelector('#msg_origin'),
+  target: tabMessaging.querySelector('#msg_target'),
+  pause: tabMessaging.querySelector('#msg_pause'),
+  clear: tabMessaging.querySelector('#msg_clear'),
+  json: tabMessaging.querySelector('#msg_json'),
+  csv: tabMessaging.querySelector('#msg_csv'),
+  rows: tabMessaging.querySelector('#msg_rows')
+};
+function msgFiltered(){
+  const t=msgRefs.txt.value.toLowerCase();
+  const c=msgRefs.channel.value.toLowerCase();
+  const o=msgRefs.origin.value.toLowerCase();
+  const g=msgRefs.target.value.toLowerCase();
+  return msgLogs.filter(r=>{
+    if(t && !(r.preview||'').toLowerCase().includes(t)) return false;
+    if(c && !(r.channel||'').toLowerCase().includes(c)) return false;
+    if(o && !(r.origin||'').toLowerCase().includes(o)) return false;
+    if(g && !(r.target||'').toLowerCase().includes(g)) return false;
+    return true;
+  });
+}
+msgRender = function(){
+  const list=msgFiltered();
+  msgRefs.rows.innerHTML='';
+  if(!list.length){ msgRefs.rows.innerHTML='<tr><td colspan="6">Sin datos</td></tr>'; return; }
+  list.forEach(rec=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.channel+'/'+rec.type)}</td><td>${escHTML(rec.origin)}</td><td>${escHTML(rec.target)}</td><td>${rec.size}</td><td>${escHTML(rec.preview)}</td>`;
+    msgRefs.rows.appendChild(tr);
+  });
+};
+msgRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_txt`, msgRefs.txt.value); }catch(_e){}; msgRender(); };
+msgRefs.channel.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_channel`, msgRefs.channel.value); }catch(_e){}; msgRender(); };
+msgRefs.origin.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_origin`, msgRefs.origin.value); }catch(_e){}; msgRender(); };
+msgRefs.target.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_target`, msgRefs.target.value); }catch(_e){}; msgRender(); };
+msgRefs.clear.onclick=()=>{ msgLogs.length=0; msgRender(); updateRuntimeBadge(); };
+msgRefs.pause.onclick=()=>{ msgPaused=!msgPaused; msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_msg_paused`, msgPaused); }catch(_e){}; };
+msgRefs.json.onclick=()=>{ const out=JSON.stringify(msgFiltered(),null,2); clip(out); msgRefs.json.textContent='¡Copiado!'; setTimeout(()=>msgRefs.json.textContent='JSON',1200); };
+msgRefs.csv.onclick=()=>{ const head=['ts','channel','type','origin','target','size','preview']; const rows=msgFiltered().map(r=>({ts:new Date(r.ts).toISOString(),channel:r.channel,type:r.type,origin:r.origin,target:r.target,size:r.size,preview:r.preview})); csvDownload(`messaging_${nowStr()}.csv`, head, rows); };
+try{ if(typeof GM_getValue==='function'){ msgRefs.txt.value=GM_getValue(`${site}_msg_txt`, ''); msgRefs.channel.value=GM_getValue(`${site}_msg_channel`, ''); msgRefs.origin.value=GM_getValue(`${site}_msg_origin`, ''); msgRefs.target.value=GM_getValue(`${site}_msg_target`, ''); msgPaused=GM_getValue(`${site}_msg_paused`, false); msgRefs.pause.textContent=msgPaused?'Reanudar':'Pausar'; } }catch(_e){}
+msgRender();
+updateRuntimeBadge();
 
 { // Global variables/functions viewer
   try {
@@ -4052,14 +4161,14 @@ netRender();
     const origPostMessage = global.postMessage;
     global.postMessage = function(msg, target, transfer){
       try{
-        TREventBus.emit({ type:'pm:post', origin:(location && location.origin)||'', target:String(target), data:ebPreview(msg), ts:Date.now() });
+        TREventBus.emit({ type:'pm:post', origin:(location && location.origin)||'', target:String(target), size:ebSize(msg), data:ebPreview(msg), ts:Date.now() });
       }catch(_e){}
       try{ logActivity('postMessage', JSON.stringify(msg)); }catch(_e){ logActivity('postMessage','[unserializable]'); }
       return origPostMessage.call(this, msg, target, transfer);
     };
     if (global.addEventListener){
       global.addEventListener('message', ev=>{
-        try{ TREventBus.emit({ type:'pm:message', origin:ev.origin, data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+        try{ TREventBus.emit({ type:'pm:message', origin:ev.origin, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
       });
     }
   }
@@ -4070,15 +4179,15 @@ netRender();
     global.BroadcastChannel = function(name){
       logActivity('broadcastchannel', name);
       const bc = new OrigBC(name);
-      TREventBus.emit({ type:'pm:bc-open', channel:name, data:null, ts:Date.now() });
+      TREventBus.emit({ type:'pm:bc-open', channel:name, origin:(location && location.origin)||'', target:name, size:0, data:null, ts:Date.now() });
       const origBCPost = bc.postMessage;
       bc.postMessage = function(msg){
-        try{ TREventBus.emit({ type:'pm:bc-post', channel:name, data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
+        try{ TREventBus.emit({ type:'pm:bc-post', channel:name, origin:(location && location.origin)||'', target:name, size:ebSize(msg), data:ebPreview(msg), ts:Date.now() }); }catch(_e){}
         try{ logActivity('broadcast-post', JSON.stringify(msg)); }catch(_e){ logActivity('broadcast-post','[unserializable]'); }
         return origBCPost.call(bc, msg);
       };
       bc.addEventListener('message', ev=>{
-        try{ TREventBus.emit({ type:'pm:bc-msg', channel:name, data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
+        try{ TREventBus.emit({ type:'pm:bc-msg', channel:name, origin:name, target:(location && location.origin)||'', size:ebSize(ev.data), data:ebPreview(ev.data), ts:Date.now() }); }catch(_e){}
         try{ logActivity('broadcast-msg', JSON.stringify(ev.data)); }catch(_e){ logActivity('broadcast-msg','[unserializable]'); }
       });
       return bc;

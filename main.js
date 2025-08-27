@@ -1,25 +1,59 @@
 const consoleLogs = [];
+const consoleLogKeys = new Set();
 let renderConsole = () => {};
-function addConsoleLog(level, args){
+let renderCE = () => {};
+function addConsoleLog(level, args, extra){
   const msg = args.map(a => {
     try { return typeof a === 'string' ? a : JSON.stringify(a); }
     catch(_e){ return String(a); }
   }).join(' ');
-  consoleLogs.push({ time: new Date().toISOString(), level, message: msg });
-  try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:`console:${level}`, message: msg, ts: Date.now() }); }catch(_e){}
+  let stack = extra && extra.stack;
+  let source = extra && extra.source;
+  let line = extra && extra.line;
+  let col = extra && extra.col;
+  if (!stack){ try{ stack = new Error().stack; }catch(_e){} }
+  if (stack){
+    const lines = String(stack).split('\n');
+    for (const l of lines){
+      const m = l.match(/(https?:\/\/[^):]+):(\d+):(\d+)/);
+      if (m){
+        if (!source) source = m[1];
+        if (!line) line = m[2];
+        if (!col) col = m[3];
+        break;
+      }
+    }
+  }
+  const key = `${level}|${msg}|${source||''}|${line||''}|${col||''}|${stack||''}`;
+  if (consoleLogKeys.has(key)) return;
+  consoleLogKeys.add(key);
+  const rec = { id: Date.now().toString(36)+Math.random().toString(36).slice(2), ts: Date.now(), time: new Date().toISOString(), level, message: msg, stack, source, line, col };
+  consoleLogs.push(rec);
+  try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:`console:${level}`, message: msg, stack, source, line, col, ts: rec.ts }); }catch(_e){}
   try { renderConsole(); } catch(_e){}
+  try { renderCE(); } catch(_e){}
 }
 (function(){
   ['log','error','warn'].forEach(level=>{
-    globalThis.console[level] = (...args)=>addConsoleLog(level, args);
+    const orig = globalThis.console[level];
+    globalThis.console[level] = (...args)=>{ addConsoleLog(level, args); if(typeof orig==='function'){ try{ orig.apply(globalThis.console,args); }catch(_e){} } };
   });
 })();
 
 if (typeof window !== 'undefined' && window.addEventListener){
   window.addEventListener('error', ev=>{
-    try{
-      if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:js', message:ev.message, stack:ev.error && ev.error.stack, source:ev.filename, line:ev.lineno, col:ev.colno, ts: Date.now() });
-    }catch(_e){}
+    try{ addConsoleLog('error', [ev.message], { stack: ev.error && ev.error.stack, source: ev.filename, line: ev.lineno, col: ev.colno }); if(ev.error) ev.error.__trLogged=true; }catch(_e){}
+    try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:js', message:ev.message, stack:ev.error && ev.error.stack, source:ev.filename, line:ev.lineno, col:ev.colno, ts: Date.now() }); }catch(_e){}
+  });
+  window.addEventListener('unhandledrejection', ev=>{
+    let msg = ''; let stack = ''; const r = ev.reason;
+    if (r && typeof r === 'object'){
+      msg = r.message || JSON.stringify(r);
+      stack = r.stack;
+      try{ r.__trLogged = true; }catch(_e){}
+    } else msg = String(r);
+    try{ addConsoleLog('error', [msg], { stack }); }catch(_e){}
+    try{ if (globalThis.TREventBus) globalThis.TREventBus.emit({ type:'error:promise', message:msg, stack, ts: Date.now() }); }catch(_e){}
   });
 }
 
@@ -1057,6 +1091,7 @@ if (typeof window !== 'undefined') (function () {
   const runtimeMsgTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="messaging"]');
   const runtimeCodecTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="codecs"]');
   const runtimeCryptoTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="crypto"]');
+  const runtimeConsoleTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="console"]');
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
@@ -1064,6 +1099,7 @@ if (typeof window !== 'undefined') (function () {
     if (runtimeMsgTabBtn) runtimeMsgTabBtn.textContent = `Messaging (${msgLogs.length})`;
     if (runtimeCodecTabBtn) runtimeCodecTabBtn.textContent = `Codecs (${codecLogs.length})`;
     if (runtimeCryptoTabBtn) runtimeCryptoTabBtn.textContent = `Crypto (${cryptoLogs.length})`;
+    if (runtimeConsoleTabBtn) runtimeConsoleTabBtn.textContent = `Console & Errors (${consoleLogs.length})`;
   };
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
@@ -1992,7 +2028,74 @@ codecRender();
 updateRuntimeBadge();
 
 /* ============================
-   Runtime Crypto
+  Runtime Console & Errors
+============================ */
+const tabCE = panel.querySelector('#tab_runtime_console');
+tabCE.innerHTML = `
+  <div class="ptk-box">
+    <div class="ptk-flex">
+      <div class="ptk-hdr">Console & Errors</div>
+      <div class="ptk-grid">
+        <select id="ce_level" class="ptk-input">
+          <option value="">nivel</option>
+          <option value="log">log</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select>
+        <input id="ce_txt" class="ptk-input" placeholder="Texto" style="width:100px">
+        <button id="ce_clear" class="ptk-btn">Clear</button>
+        <button id="ce_json" class="ptk-btn">JSON</button>
+      </div>
+    </div>
+    <div style="max-height:200px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th>ts</th><th>nivel</th><th>mensaje</th><th>source</th><th>stack</th><th>acciones</th></tr></thead>
+        <tbody id="ce_rows"></tbody>
+      </table>
+    </div>
+  </div>
+`;
+const ceRefs = {
+  level: tabCE.querySelector('#ce_level'),
+  txt: tabCE.querySelector('#ce_txt'),
+  clear: tabCE.querySelector('#ce_clear'),
+  json: tabCE.querySelector('#ce_json'),
+  rows: tabCE.querySelector('#ce_rows')
+};
+function ceFiltered(){
+  const lvl = ceRefs.level.value;
+  const txt = ceRefs.txt.value.toLowerCase();
+  return consoleLogs.filter(r=>{
+    if(lvl && r.level!==lvl) return false;
+    if(txt && !(r.message||'').toLowerCase().includes(txt)) return false;
+    return true;
+  });
+}
+renderCE = function(){
+  const list = ceFiltered();
+  ceRefs.rows.innerHTML='';
+  if(!list.length){ ceRefs.rows.innerHTML='<tr><td colspan="6">Sin datos</td></tr>'; updateRuntimeBadge(); return; }
+  list.forEach(rec=>{
+    const src = rec.source ? `${rec.source}:${rec.line||''}:${rec.col||''}` : '';
+    const tr=document.createElement('tr');
+    const stack = rec.stack ? `<details><summary>ver</summary><pre class="ptk-code">${escHTML(rec.stack)}</pre></details>` : '';
+    tr.innerHTML=`<td>${new Date(rec.ts).toLocaleTimeString()}</td><td>${escHTML(rec.level)}</td><td>${escHTML(rec.message)}</td><td>${escHTML(src)}</td><td>${stack}</td><td><button class="ptk-btn ce_copy" data-id="${rec.id}">Copy</button></td>`;
+    ceRefs.rows.appendChild(tr);
+  });
+  ceRefs.rows.querySelectorAll('.ce_copy').forEach(btn=>{
+    btn.onclick=()=>{ const rec=consoleLogs.find(r=>r.id==btn.dataset.id); if(rec){ clip(JSON.stringify(rec,null,2)); btn.textContent='¡Copiado!'; setTimeout(()=>btn.textContent='Copy',1200); } };
+  });
+  updateRuntimeBadge();
+};
+ceRefs.level.onchange=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_ce_level`, ceRefs.level.value); }catch(_e){}; renderCE(); };
+ceRefs.txt.oninput=()=>{ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_ce_txt`, ceRefs.txt.value); }catch(_e){}; renderCE(); };
+ceRefs.clear.onclick=()=>{ consoleLogs.length=0; consoleLogKeys.clear(); renderCE(); renderConsole(); };
+ceRefs.json.onclick=()=>{ const out=JSON.stringify(ceFiltered(),null,2); clip(out); ceRefs.json.textContent='¡Copiado!'; setTimeout(()=>ceRefs.json.textContent='JSON',1200); };
+try{ if(typeof GM_getValue==='function'){ ceRefs.level.value=GM_getValue(`${site}_ce_level`, ''); ceRefs.txt.value=GM_getValue(`${site}_ce_txt`, ''); } }catch(_e){}
+renderCE();
+
+/* ============================
+  Runtime Crypto
 ============================ */
 const tabCrypto = panel.querySelector('#tab_runtime_crypto');
 tabCrypto.innerHTML = `
@@ -3918,9 +4021,11 @@ updateRuntimeBadge();
 
   if (typeof window !== 'undefined'){
     window.addEventListener('error', e => {
+      if(e.error && e.error.__trLogged) return;
       logError(e.error || e.message);
     });
     window.addEventListener('unhandledrejection', e => {
+      if(e.reason && e.reason.__trLogged) return;
       logError(e.reason);
     });
   }

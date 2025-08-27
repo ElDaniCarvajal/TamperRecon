@@ -594,9 +594,9 @@ if (typeof window !== 'undefined') (function () {
           <div class="ptk-tab" data-tab="crawler">Crawler (0)</div>
           <div class="ptk-tab" data-tab="debug">Source Maps / Debug Artefacts (0)</div>
         </div>
-        <section id="tab_discover_files"><div class="ptk-row">Placeholder</div></section>
-        <section id="tab_discover_js" style="display:none"><div class="ptk-row">Placeholder</div></section>
-        <section id="tab_discover_crawler" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_discover_files"></section>
+        <section id="tab_discover_js" style="display:none"></section>
+        <section id="tab_discover_crawler" style="display:none"></section>
         <section id="tab_discover_debug" style="display:none"><div class="ptk-row">Placeholder</div></section>
       </div>
       <div id="top_apis" style="display:none">
@@ -611,7 +611,7 @@ if (typeof window !== 'undefined') (function () {
         <section id="tab_apis_graphql" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_apis_cors" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_apis_ratelimit" style="display:none"><div class="ptk-row">Placeholder</div></section>
-        <section id="tab_apis_fuzzer" style="display:none"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_apis_fuzzer" style="display:none"></section>
       </div>
       <div id="top_security" style="display:none">
         <div class="ptk-tabs" id="tabs_security">
@@ -620,7 +620,7 @@ if (typeof window !== 'undefined') (function () {
           <div class="ptk-tab" data-tab="tls">TLS (0)</div>
           <div class="ptk-tab" data-tab="sw">SW & Cache (0)</div>
         </div>
-        <section id="tab_security_versions"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_security_versions"></section>
         <section id="tab_security_cookies" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_security_tls" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_security_sw" style="display:none"><div class="ptk-row">Placeholder</div></section>
@@ -634,7 +634,7 @@ if (typeof window !== 'undefined') (function () {
           <div class="ptk-tab" data-tab="console">Console & Errors (0)</div>
           <div class="ptk-tab" data-tab="globals">Globals/Vars (0)</div>
         </div>
-        <section id="tab_runtime_network"><div class="ptk-row">Placeholder</div></section>
+        <section id="tab_runtime_network"></section>
         <section id="tab_runtime_messaging" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_runtime_codecs" style="display:none"><div class="ptk-row">Placeholder</div></section>
         <section id="tab_runtime_crypto" style="display:none"><div class="ptk-row">Placeholder</div></section>
@@ -643,24 +643,12 @@ if (typeof window !== 'undefined') (function () {
       </div>
       <div id="top_report">
         <div class="ptk-tabs" id="tabs">
-          <div class="ptk-tab active" data-tab="files">Files</div>
-          <div class="ptk-tab" data-tab="js">JS Hunter</div>
-          <div class="ptk-tab" data-tab="runtime">Runtime Secrets</div>
-          <div class="ptk-tab" data-tab="crawler">Crawler</div>
-          <div class="ptk-tab" data-tab="versions">Versions</div>
-          <div class="ptk-tab" data-tab="fuzzer">API Fuzzer</div>
-          <div class="ptk-tab" data-tab="buckets">Cloud Buckets</div>
+          <div class="ptk-tab active" data-tab="buckets">Cloud Buckets</div>
           <div class="ptk-tab" data-tab="hard">Hardening</div>
           <div class="ptk-tab" data-tab="console">Console</div>
           <div class="ptk-tab" data-tab="errors">Errors</div>
         </div>
-        <section id="tab_files"></section>
-        <section id="tab_js" style="display:none"></section>
-        <section id="tab_runtime" style="display:none"></section>
-        <section id="tab_crawler" style="display:none"></section>
-        <section id="tab_versions" style="display:none"></section>
-        <section id="tab_fuzzer" style="display:none"></section>
-        <section id="tab_buckets" style="display:none"></section>
+        <section id="tab_buckets"></section>
         <section id="tab_hard" style="display:none"></section>
         <section id="tab_console" style="display:none"></section>
         <section id="tab_errors" style="display:none"></section>
@@ -742,18 +730,18 @@ if (typeof window !== 'undefined') (function () {
     return show;
   }
 
-  const showReportTab = initTabs('', ['files','js','runtime','crawler','versions','fuzzer','buckets','hard','console','errors'], panel.querySelector('#top_report'));
+  initTabs('', ['buckets','hard','console','errors'], panel.querySelector('#top_report'));
   initTabs('discover', ['files','js','crawler','debug'], panel.querySelector('#top_discover'));
   initTabs('apis', ['openapi','graphql','cors','ratelimit','fuzzer'], panel.querySelector('#top_apis'));
   initTabs('security', ['versions','cookies','tls','sw'], panel.querySelector('#top_security'));
-  initTabs('runtime', ['network','messaging','codecs','crypto','console','globals'], panel.querySelector('#top_runtime'));
+  const showRuntimeTab = initTabs('runtime', ['network','messaging','codecs','crypto','console','globals'], panel.querySelector('#top_runtime'));
 
   const reportTabsEl = panel.querySelector('#tabs');
-  const runtimeTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="runtime"]');
+  const runtimeTabBtn = panel.querySelector('#tabs_runtime .ptk-tab[data-tab="network"]');
   const consoleTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="console"]');
   const errorsTabBtn = reportTabsEl.querySelector('.ptk-tab[data-tab="errors"]');
   updateRuntimeBadge = function(){
-    if (runtimeTabBtn) runtimeTabBtn.textContent = `Runtime Secrets (${runtimeLogs.length})`;
+    if (runtimeTabBtn) runtimeTabBtn.textContent = `Network (${runtimeLogs.length})`;
   };
   function updateConsoleBadge(){
     if (consoleTabBtn) consoleTabBtn.textContent = `Console (${consoleLogs.length})`;
@@ -792,8 +780,8 @@ if (typeof window !== 'undefined') (function () {
   };
   renderErrors();
   runtimeNotify = function(){
-    showTopTab('report');
-    showReportTab('runtime');
+    showTopTab('runtime');
+    showRuntimeTab('network');
     if (!runtimeAlerted){
       runtimeAlerted = true;
       try{ addConsoleLog('log', ['Runtime secret found']); }catch(e){ logError(e); }
@@ -803,7 +791,8 @@ if (typeof window !== 'undefined') (function () {
   /* ============================
      FILES (igual que antes, con CSV file/line)
   ============================ */
-  const tabFiles = panel.querySelector('#tab_files');
+  const tabFiles = panel.querySelector('#tab_discover_files');
+  const filesTabBtn = panel.querySelector('#tabs_discover .ptk-tab[data-tab="files"]');
   tabFiles.innerHTML = `
     <div class="ptk-box">
       <div class="ptk-flex">
@@ -982,6 +971,7 @@ if (typeof window !== 'undefined') (function () {
     tabElsF.c5.textContent = String(counts['5']||0);
     tabElsF.cOther.textContent = String(counts.other||0);
     tabElsF.results.innerHTML='';
+    if (filesTabBtn) filesTabBtn.textContent = `Files (${rows.length})`;
     rows.forEach(({url,status,note,family:fam})=>{
       const div = document.createElement('div'); div.className='ptk-row';
       div.innerHTML = `<div><a class="ptk-link" href="${url}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${url}</a></div>
@@ -1046,13 +1036,13 @@ if (typeof window !== 'undefined') (function () {
   function sfStart(){
     if (sf.started) return;
     sf.started=true; sf.paused=false; sf.session++;
-    sf.findings.length=0; tabElsF.results.innerHTML='';
+    sf.findings.length=0; tabElsF.results.innerHTML=''; sfRender();
     sf.queue = sfBuildQueue(); sf.idx=0; sf.inFlight=0; sf.done=0;
     if (!sf.queue.length){ tabElsF.status.textContent='Sin rutas para probar.'; sfSetProgress(0,0); sf.started=false; return; }
     sfUpdateStatus(); sfPump();
   }
   function sfPauseResume(){ if (!sf.started) return; sf.paused=!sf.paused; tabElsF.pause.textContent = sf.paused?'Reanudar':'Pausar'; sfUpdateStatus(); if (!sf.paused) sfPump(); }
-  function sfClear(){ sf.paused=true; sf.started=false; sf.session++; sf.queue=[]; sf.inFlight=0; sf.idx=0; sf.done=0; sf.findings.length=0; tabElsF.results.innerHTML=''; tabElsF.status.textContent='En espera…'; sfSetProgress(0,0); tabElsF.pause.textContent='Pausar'; }
+  function sfClear(){ sf.paused=true; sf.started=false; sf.session++; sf.queue=[]; sf.inFlight=0; sf.idx=0; sf.done=0; sf.findings.length=0; tabElsF.results.innerHTML=''; tabElsF.status.textContent='En espera…'; sfSetProgress(0,0); tabElsF.pause.textContent='Pausar'; sfRender(); }
   tabElsF.start.onclick=sfStart; tabElsF.pause.onclick=sfPauseResume; tabElsF.clear.onclick=sfClear;
   tabElsF.copy.onclick=()=>{ const current=sf.findings.filter(f=>f.session===sf.session); const out=JSON.stringify(current,null,2); clip(out); tabElsF.copy.textContent='¡Copiado!'; setTimeout(()=>tabElsF.copy.textContent='Copiar JSON',1200); };
   tabElsF.csv.onclick=()=>{ const rows=sf.findings.filter(f=>f.session===sf.session); const head=['file','line','url','status','note','family']; csvDownload(`files_probe_${nowStr()}.csv`, head, rows); };
@@ -1060,7 +1050,8 @@ if (typeof window !== 'undefined') (function () {
 /* ============================
    JS Secret & Endpoint Hunter (dominios solo en strings/comentarios; scope; anti-ruido en minificados)
 ============================ */
-const tabJS = panel.querySelector('#tab_js');
+const tabJS = panel.querySelector('#tab_discover_js');
+const jsTabBtn = panel.querySelector('#tabs_discover .ptk-tab[data-tab="js"]');
 tabJS.innerHTML = `
   <div class="ptk-box">
     <div class="ptk-flex">
@@ -1247,6 +1238,7 @@ function jsFilterKey(type){
 function jsRender(){
   const current = jh.findings.filter(f=>f.session===jh.session && (f.type==='Domain' || jsFilterKey(f.type)));
   jsRefs.results.innerHTML='';
+  if (jsTabBtn) jsTabBtn.textContent = `JS Hunter (${current.length})`;
   current.forEach(f=>{
     const div = document.createElement('div'); div.className='ptk-row';
     div.innerHTML = `<div style="opacity:.8">${f.file}${typeof f.line==='number'?` :${f.line+1}`:''}</div>
@@ -1411,13 +1403,13 @@ function jsPump(){
 function jsStart(){
   if (jh.started) return;
   jh.started=true; jh.paused=false; jh.session++; jh.domainsSet.clear();
-  jh.findings.length=0; jsRefs.results.innerHTML='';
+  jh.findings.length=0; jsRefs.results.innerHTML=''; jsRender();
   jh.targets = jsCollectTargets(); jh.queueIdx=0; jh.active=0;
   if (!jh.targets.length){ jsRefs.status.textContent='Sin scripts para analizar.'; jsSetProgress(0,0); jh.started=false; return; }
   jsUpdateStatus(); jsPump();
 }
 function jsPauseResume(){ if (!jh.started) return; jh.paused=!jh.paused; jsRefs.pause.textContent=jh.paused?'Reanudar JS':'Pausar JS'; jsUpdateStatus(); if (!jh.paused) jsPump(); }
-function jsClear(){ jh.paused=true; jh.started=false; jh.session++; jh.targets=[]; jh.queueIdx=0; jh.active=0; jh.findings.length=0; jh.domainsSet.clear(); jsRefs.results.innerHTML=''; jsRefs.status.textContent='En espera…'; jsSetProgress(0,0); jsRefs.pause.textContent='Pausar JS'; }
+function jsClear(){ jh.paused=true; jh.started=false; jh.session++; jh.targets=[]; jh.queueIdx=0; jh.active=0; jh.findings.length=0; jh.domainsSet.clear(); jsRefs.results.innerHTML=''; jsRefs.status.textContent='En espera…'; jsSetProgress(0,0); jsRefs.pause.textContent='Pausar JS'; jsRender(); }
 
 jsRefs.start.onclick=jsStart; jsRefs.pause.onclick=jsPauseResume; jsRefs.clear.onclick=jsClear;
 jsRefs.copy.onclick=()=>{ const current=jh.findings.filter(f=>f.session===jh.session); const out=JSON.stringify(current,null,2); clip(out); jsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>jsRefs.copy.textContent='Copiar JSON',1200); };
@@ -1426,7 +1418,7 @@ jsRefs.csv.onclick=()=>{ const rows=jh.findings.filter(f=>f.session===jh.session
 /* ============================
    Runtime Secrets
 ============================ */
-const tabRuntime = panel.querySelector('#tab_runtime');
+const tabRuntime = panel.querySelector('#tab_runtime_network');
 tabRuntime.innerHTML = `
   <div class="ptk-box">
     <div class="ptk-flex">
@@ -1470,7 +1462,7 @@ rsRender = function(){
   });
 };
 rsRender();
-rsRefs.clear.onclick=()=>{ runtimeLogs.length=0; rsRender(); };
+rsRefs.clear.onclick=()=>{ runtimeLogs.length=0; rsRender(); updateRuntimeBadge(); };
 rsRefs.copy.onclick=()=>{ const out=JSON.stringify(runtimeLogs,null,2); clip(out); rsRefs.copy.textContent='¡Copiado!'; setTimeout(()=>rsRefs.copy.textContent='Copiar JSON',1200); };
 rsRefs.dl.onclick=()=>{
   const data = { logs: runtimeLogs, globals: getAllGlobals() };
@@ -1668,7 +1660,8 @@ rsRefs.pmToggle.onclick=()=>{
   /* ============================
      CRAWLER
   ============================ */
-  const tabCrawler = panel.querySelector('#tab_crawler');
+  const tabCrawler = panel.querySelector('#tab_discover_crawler');
+  const crTabBtn = panel.querySelector('#tabs_discover .ptk-tab[data-tab="crawler"]');
   tabCrawler.innerHTML = `
     <div class="ptk-box">
       <div class="ptk-flex">
@@ -1739,6 +1732,7 @@ rsRefs.pmToggle.onclick=()=>{
     pillCrTxt.textContent = `${done}/${total} • activos=${cr.inFlight}${cr.paused?' • PAUSADO':''}`;
     pillCrBar.style.width = pct + '%';
   }
+  function crUpdateCount(){ if (crTabBtn) crTabBtn.textContent = `Crawler (${cr.pages.length})`; }
   function crRenderRow(u, status, ctype, title, note){
     const fam = family(status);
     const div = document.createElement('div'); div.className='ptk-row';
@@ -1747,6 +1741,7 @@ rsRefs.pmToggle.onclick=()=>{
     div.innerHTML = `<div><a class="ptk-link" href="${u}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${u}</a></div>
                      <div class="ptk-code" style="color:${famColor(fam)}">HTTP ${status} · ${ctype||'—'}${t}${n}</div>`;
     crRefs.results.appendChild(div);
+    crUpdateCount();
   }
   function crPump(){
     if (cr.paused) return;
@@ -1781,12 +1776,13 @@ rsRefs.pmToggle.onclick=()=>{
     if (cr.started) return;
     cr.started=true; cr.paused=false; cr.session++; cr.inFlight=0; cr.q.length=0; cr.pages.length=0; cr.assets.length=0; cr.seen.clear();
     crRefs.results.innerHTML='';
+    crUpdateCount();
     crawlEnqueue(location.href);
     ['/robots.txt','/sitemap.xml','/security.txt','/ads.txt'].forEach(p=>crawlEnqueue(location.origin+p));
     crRefs.status.textContent = 'Iniciando…'; crPump();
   }
   function crPause(){ if (!cr.started) return; cr.paused = !cr.paused; crRefs.pause.textContent = cr.paused?'Reanudar':'Pausar'; if (!cr.paused) crPump(); }
-  function crClear(){ cr.paused=true; cr.started=false; cr.session++; cr.inFlight=0; cr.q.length=0; cr.pages.length=0; cr.assets.length=0; cr.seen.clear(); crRefs.results.innerHTML=''; crRefs.status.textContent='En espera…'; crRefs.pause.textContent='Pausar'; crSetProgress(); }
+  function crClear(){ cr.paused=true; cr.started=false; cr.session++; cr.inFlight=0; cr.q.length=0; cr.pages.length=0; cr.assets.length=0; cr.seen.clear(); crRefs.results.innerHTML=''; crRefs.status.textContent='En espera…'; crRefs.pause.textContent='Pausar'; crSetProgress(); crUpdateCount(); }
   crRefs.start.onclick=crStart; crRefs.pause.onclick=crPause; crRefs.clear.onclick=crClear;
   crRefs.copy.onclick=()=>{ const out=JSON.stringify({pages:cr.pages, assets:unique(cr.assets)}, null, 2); clip(out); crRefs.copy.textContent='¡Copiado!'; setTimeout(()=>crRefs.copy.textContent='Copiar JSON',1200); };
   crRefs.csv.onclick=()=>{ const head=['file','line','url','status','contentType','title','note']; csvDownload(`crawl_pages_${nowStr()}.csv`, head, cr.pages.map(p=>({file:p.file,line:p.line,url:p.url,status:p.status,contentType:p.contentType,title:p.title||'',note:p.note||''}))); };
@@ -1794,7 +1790,8 @@ rsRefs.pmToggle.onclick=()=>{
    /* ============================
      VERSIONS (cola única, anti-stall; headers 1x/host; externos solo si referenciados)
   ============================ */
-  const tabVers = panel.querySelector('#tab_versions');
+  const tabVers = panel.querySelector('#tab_security_versions');
+  const versTabBtn = panel.querySelector('#tabs_security .ptk-tab[data-tab="versions"]');
   tabVers.innerHTML = `
     <div class="ptk-box">
       <div class="ptk-flex">
@@ -1832,6 +1829,8 @@ rsRefs.pmToggle.onclick=()=>{
 
   const vd = { findings: [], seen:new Set(), session:0, total:0, done:0, active:0 };
 
+  function vdUpdateCount(){ if (versTabBtn) versTabBtn.textContent = `Versions/Headers/Policies (${vd.findings.length})`; }
+
   const RX_VER = /\b(?:v|version[^\w]?|ver[^\w]?|release[^\w]?|build[^\w]?){0,1}\s*([0-9]+\.[0-9]+(?:\.[0-9]+){0,3}(?:[-_a-z0-9.]+)?)\b/gi;
   const RX_FILE_VER = /(?:jquery|react|vue|angular|bootstrap|moment|lodash|underscore|d3|leaflet|three|ckeditor|tinymce|swiper|alpine|next|nuxt|webpack|tailwind|fontawesome|sentry|amplitude|mixpanel|express|nestjs|chart|semantic|ember)[^\/]*?([0-9]+(?:\.[0-9]+){1,3})/i;
 
@@ -1842,6 +1841,7 @@ rsRefs.pmToggle.onclick=()=>{
     if (vd.seen.has(key)) return;
     vd.seen.add(key);
     vd.findings.push({ kind, tech, version, url, where, evidence, file: file||url, line: (typeof line==='number' ? (line+1) : '') });
+    vdUpdateCount();
   }
   function vdRow(f){
     const div = document.createElement('div'); div.className='ptk-row';
@@ -1873,6 +1873,7 @@ rsRefs.pmToggle.onclick=()=>{
     vd.findings.length=0; vd.seen.clear();
     vdRefs.results.innerHTML=''; vdRefs.status.textContent='En espera…';
     vd.total=vd.done=vd.active=0; vdSetProg();
+    vdUpdateCount();
   };
   vdRefs.csv.onclick = ()=>{
     const head=['kind','tech','version','file','line','url','where','evidence'];
@@ -1881,7 +1882,7 @@ rsRefs.pmToggle.onclick=()=>{
 
   function vdRun(){
     vd.session++; const mySession = vd.session;
-    vd.findings.length=0; vd.seen.clear();
+    vd.findings.length=0; vd.seen.clear(); vdUpdateCount();
     vdRefs.results.innerHTML=''; vdRefs.status.textContent='Preparando…';
 
     // 1) Contenido del MISMO HOST
@@ -2078,7 +2079,8 @@ rsRefs.pmToggle.onclick=()=>{
   /* ============================
      API Fuzzer (sin cambios, CSV con file/line)
   ============================ */
-  const tabFuzz = panel.querySelector('#tab_fuzzer');
+  const tabFuzz = panel.querySelector('#tab_apis_fuzzer');
+  const fzTabBtn = panel.querySelector('#tabs_apis .ptk-tab[data-tab="fuzzer"]');
   tabFuzz.innerHTML = `
     <div class="ptk-box">
       <div class="ptk-flex">
@@ -2116,6 +2118,8 @@ rsRefs.pmToggle.onclick=()=>{
   const pillFzTxt = pill.querySelector('#pill_fuzz_txt'), pillFzBar = pill.querySelector('#pill_fuzz_bar');
   const fz = { started:false, paused:false, inFlight:0, idx:0, queue:[], findings:[], session:0 };
 
+  function fzUpdateCount(){ if (fzTabBtn) fzTabBtn.textContent = `API Fuzzer (${fz.findings.length})`; }
+
   function fzSeeds(){
     const base = ['', 'api','api/v3','api/v4','v1','v2','auth','oauth','oauth2','users','login','health','status','docs','api-docs','swagger','openapi.json','v3/api-docs','graphql','admin','internal'];
     const extras = (fzRefs.seeds.value||'').split(',').map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^\/?/,''));
@@ -2152,6 +2156,7 @@ rsRefs.pmToggle.onclick=()=>{
   }
   function fzAddFinding(url,method,status,headers,note){
     fz.findings.push({ url, file:url, line:'', method, status, note: note||'', allow: (headers.match(/^\s*allow:\s*([^\n\r]+)/gim)||[]).join(' | '), wwwAuth:(headers.match(/^\s*www-authenticate:\s*([^\n\r]+)/gim)||[]).join(' | ') });
+    fzUpdateCount();
     const fam = family(status);
     const div = document.createElement('div'); div.className='ptk-row';
     div.innerHTML = `<div><b>${method}</b> <a class="ptk-link" href="${url}" target="_blank" rel="noopener noreferrer" style="color:${famColor(fam)}">${url}</a></div>
@@ -2176,9 +2181,9 @@ rsRefs.pmToggle.onclick=()=>{
     }
     if (fz.idx>=fz.queue.length && fz.inFlight===0) fzRefs.status.textContent=`Finalizado. Intentos: ${fz.queue.length}`;
   }
-  function fzStart(){ if (fz.started) return; fz.started=true; fz.paused=false; fz.session++; fz.idx=0; fz.inFlight=0; fz.findings.length=0; fzRefs.results.innerHTML=''; fz.queue=fzBuildQueue(); if (!fz.queue.length){ fzRefs.status.textContent='Sin endpoints a probar.'; fz.started=false; return; } fzPump(); }
+  function fzStart(){ if (fz.started) return; fz.started=true; fz.paused=false; fz.session++; fz.idx=0; fz.inFlight=0; fz.findings.length=0; fzRefs.results.innerHTML=''; fzUpdateCount(); fz.queue=fzBuildQueue(); if (!fz.queue.length){ fzRefs.status.textContent='Sin endpoints a probar.'; fz.started=false; return; } fzPump(); }
   function fzPause(){ if (!fz.started) return; fz.paused=!fz.paused; fzRefs.pause.textContent=fz.paused?'Reanudar':'Pausar'; if (!fz.paused) fzPump(); }
-  function fzClear(){ fz.paused=true; fz.started=false; fz.session++; fz.idx=0; fz.inFlight=0; fz.queue=[]; fz.findings.length=0; fzRefs.results.innerHTML=''; fzRefs.status.textContent='En espera…'; fzRefs.pause.textContent='Pausar'; fzSetProg(); }
+  function fzClear(){ fz.paused=true; fz.started=false; fz.session++; fz.idx=0; fz.inFlight=0; fz.queue=[]; fz.findings.length=0; fzRefs.results.innerHTML=''; fzRefs.status.textContent='En espera…'; fzRefs.pause.textContent='Pausar'; fzSetProg(); fzUpdateCount(); }
   fzRefs.start.onclick=fzStart; fzRefs.pause.onclick=fzPause; fzRefs.clear.onclick=fzClear;
   fzRefs.csv.onclick=()=>{ const head=['file','line','method','url','status','note','allow','wwwAuth']; csvDownload(`api_fuzzer_${nowStr()}.csv`, head, fz.findings); };
 

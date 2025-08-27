@@ -704,6 +704,13 @@ if (typeof window !== 'undefined') (function () {
   let netRender = ()=>{};
   let netPaused = false;
   let netSeq = 0;
+  const netSeen = new Set();
+  let netRenderScheduled = false;
+  function scheduleNetRender(){
+    if(netRenderScheduled) return;
+    netRenderScheduled = true;
+    requestAnimationFrame(()=>{ netRenderScheduled=false; try{ netRender(); }catch(_e){} });
+  }
   function hostFromUrl(u){ try{ return new URL(u, location.href).host; }catch(_e){ return ''; } }
   function headersObj(h){
     const out={};
@@ -721,12 +728,96 @@ if (typeof window !== 'undefined') (function () {
   function addNetLog(rec){
     if(netPaused || !liveNet) return;
     if(globalThis.TREventBus && globalThis.TREventBus.sampling && Math.random()<0.8) return;
-    rec.id = ++netSeq;
+    if(rec.id && netSeen.has(rec.id)) return;
+    if(!rec.id) rec.id = ++netSeq;
+    netSeen.add(rec.id);
     ringPush(netLogs, rec);
     logEvent('network', rec);
     updateRuntimeBadge();
     try{ if(globalThis.TREventBus) globalThis.TREventBus.emit({ type:'net:log', data:rec, ts:Date.now() }); }catch(_e){}
-    try{ netRender(); }catch(_e){}
+    scheduleNetRender();
+  }
+
+  function handleNetEvent(ev){
+    if(ev.type==='net:log'){ addNetLog(ev.data||{}); return; }
+    const base = (ev.type||'').split(':')[1] || '';
+    if(ev.phase && !['end','load','error'].includes(ev.phase)) return;
+    const rec = {
+      ts: ev.ts || Date.now(),
+      type: base,
+      method: ev.method || '',
+      url: ev.url || '',
+      host: hostFromUrl(ev.url),
+      status: ev.status || 0,
+      ms: ev.ms || 0,
+      size: ev.size || ((ev.resBody&&ev.resBody.length)||0),
+      reqHeaders: ev.reqHeaders,
+      resHeaders: ev.resHeaders,
+      reqBody: ev.reqBody,
+      resBody: ev.resBody
+    };
+    if(rec.reqHeaders){ Object.keys(rec.reqHeaders).forEach(k=>rec.reqHeaders[k]=redact(truncateBytes(String(rec.reqHeaders[k])))); }
+    if(rec.resHeaders){ Object.keys(rec.resHeaders).forEach(k=>rec.resHeaders[k]=redact(truncateBytes(String(rec.resHeaders[k])))); }
+    if(rec.reqBody) rec.reqBody = redact(truncateBytes(rec.reqBody));
+    if(rec.resBody) rec.resBody = redact(truncateBytes(rec.resBody));
+    addNetLog(rec);
+  }
+  function handleWsEvent(ev){
+    const m = (ev.type||'').split(':')[1] || '';
+    const rec = {
+      ts: ev.ts || Date.now(),
+      type: 'ws',
+      method: m,
+      url: ev.url || '',
+      host: hostFromUrl(ev.url),
+      status: ev.code || 0,
+      ms: 0,
+      size: (ev.data && ev.data.length)||0
+    };
+    if(ev.data){
+      if(m==='send') rec.reqBody = redact(truncateBytes(ev.data));
+      if(m==='message') rec.resBody = redact(truncateBytes(ev.data));
+    }
+    addNetLog(rec);
+  }
+  function handleSseEvent(ev){
+    const rec = {
+      ts: ev.ts || Date.now(),
+      type: 'sse',
+      method: ev.event || ((ev.type||'').split(':')[1]||''),
+      url: ev.url || '',
+      host: hostFromUrl(ev.url),
+      status: 0,
+      ms: 0,
+      size: (ev.data && ev.data.length)||0,
+      resBody: ev.data
+    };
+    if(rec.resBody) rec.resBody = redact(truncateBytes(rec.resBody));
+    addNetLog(rec);
+  }
+  let netSubId=0, wsSubId=0, sseSubId=0;
+  function updateNetSubscription(){
+    try{
+      if(!globalThis.TREventBus) return;
+      if(liveNet){
+        if(!netSubId){
+          if(globalThis.TREventBuffers && globalThis.TREventBuffers.net) globalThis.TREventBuffers.net.all().forEach(handleNetEvent);
+          netSubId = globalThis.TREventBus.subscribe('net:*', handleNetEvent);
+        }
+        if(!wsSubId){
+          if(globalThis.TREventBuffers && globalThis.TREventBuffers.ws) globalThis.TREventBuffers.ws.all().forEach(handleWsEvent);
+          wsSubId = globalThis.TREventBus.subscribe('ws:*', handleWsEvent);
+        }
+        if(!sseSubId){
+          if(globalThis.TREventBuffers && globalThis.TREventBuffers.sse) globalThis.TREventBuffers.sse.all().forEach(handleSseEvent);
+          sseSubId = globalThis.TREventBus.subscribe('sse:*', handleSseEvent);
+        }
+      } else {
+        if(netSubId){ globalThis.TREventBus.unsubscribe(netSubId); netSubId=0; }
+        if(wsSubId){ globalThis.TREventBus.unsubscribe(wsSubId); wsSubId=0; }
+        if(sseSubId){ globalThis.TREventBus.unsubscribe(sseSubId); sseSubId=0; }
+      }
+    }catch(_e){}
   }
 
   const msgLogs = [];
@@ -1305,12 +1396,13 @@ if (typeof window !== 'undefined') (function () {
   liveRefs.console.checked = liveConsole;
   liveRefs.globals.checked = liveGlobals;
   function persistLive(key, val){ try{ if(typeof GM_setValue==='function') GM_setValue(`${site}_live_${key}`, val); }catch(_e){} }
-  liveRefs.net.onchange = ()=>{ liveNet = liveRefs.net.checked; persistLive('net', liveNet); updateLiveChips(); };
+  liveRefs.net.onchange = ()=>{ liveNet = liveRefs.net.checked; persistLive('net', liveNet); updateNetSubscription(); updateLiveChips(); };
   liveRefs.msg.onchange = ()=>{ liveMsg = liveRefs.msg.checked; persistLive('msg', liveMsg); updatePmSubscription(); updateLiveChips(); };
   liveRefs.codec.onchange = ()=>{ liveCodec = liveRefs.codec.checked; persistLive('codec', liveCodec); updateLiveChips(); };
   liveRefs.crypto.onchange = ()=>{ liveCrypto = liveRefs.crypto.checked; persistLive('crypto', liveCrypto); updateCryptoSubscription(); updateLiveChips(); };
   liveRefs.console.onchange = ()=>{ liveConsole = liveRefs.console.checked; persistLive('console', liveConsole); updateLiveChips(); };
   liveRefs.globals.onchange = ()=>{ liveGlobals = liveRefs.globals.checked; persistLive('globals', liveGlobals); updateLiveChips(); };
+  updateNetSubscription();
   updatePmSubscription();
   updateCryptoSubscription();
   updateLiveChips();
@@ -2076,12 +2168,16 @@ function netFiltered(){
   const t=netRefs.txt.value.toLowerCase();
   const h=netRefs.host.value.toLowerCase();
   const m=netRefs.method.value.toLowerCase();
-  const s=netRefs.status.value.trim();
+  const s=netRefs.status.value.trim().toLowerCase();
   return netLogs.filter(r=>{
     if(t && !r.url.toLowerCase().includes(t)) return false;
     if(h && !(r.host||'').toLowerCase().includes(h)) return false;
     if(m && !((r.method||'').toLowerCase().includes(m) || r.type.toLowerCase().includes(m))) return false;
-    if(s){ const parts=s.split('-'); const st=Number(r.status||0); if(parts[0] && st<Number(parts[0])) return false; if(parts[1] && st>Number(parts[1])) return false; }
+    if(s){
+      const st=Number(r.status||0);
+      if(/^[2345]xx$/.test(s)){ const base=Number(s[0])*100; if(st<base || st>=base+100) return false; }
+      else { const parts=s.split('-'); if(parts[0] && st<Number(parts[0])) return false; if(parts[1] && st>Number(parts[1])) return false; }
+    }
     return true;
   });
 }
@@ -2094,7 +2190,15 @@ netRender = function(){
     const copy=document.createElement('button'); copy.className='ptk-btn'; copy.textContent='Copy';
     copy.onclick=()=>{ clip(JSON.stringify(rec,null,2)); copy.textContent='¡Copiado!'; setTimeout(()=>copy.textContent='Copy',1200); };
     const det=document.createElement('button'); det.className='ptk-btn'; det.textContent='Details';
-    det.onclick=()=>{ let html=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.method||rec.type)} ${escHTML(rec.url)}</div><button id="net_det_close" class="ptk-btn">Cerrar</button></div>`; if(rec.reqHeaders){ html+=`<div><b>Request Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.reqHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.reqBody){ html+=`<div><b>Request Body</b><pre class="ptk-code">${escHTML(rec.reqBody)}</pre></div>`; } if(rec.resHeaders){ html+=`<div><b>Response Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.resHeaders).map(([k,v])=>k+': '+v).join('\n'))}</pre></div>`; } if(rec.resBody){ html+=`<div><b>Response Body</b><pre class="ptk-code">${escHTML(rec.resBody)}</pre></div>`; } netRefs.details.innerHTML=html; netRefs.details.style.display=''; netRefs.details.querySelector('#net_det_close').onclick=()=>{ netRefs.details.style.display='none'; }; };
+    det.onclick=()=>{
+      let html=`<div class="ptk-flex"><div class="ptk-hdr">${escHTML(rec.method||rec.type)} ${escHTML(rec.url)}</div><button id="net_det_close" class="ptk-btn">Cerrar</button></div>`;
+      if(rec.reqHeaders){ html+=`<div><b>Request Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.reqHeaders).map(([k,v])=>k+': '+redact(truncateBytes(String(v)))).join('\n'))}</pre></div>`; }
+      if(rec.reqBody){ html+=`<div><b>Request Body</b><pre class="ptk-code">${escHTML(redact(truncateBytes(rec.reqBody)))}</pre></div>`; }
+      if(rec.resHeaders){ html+=`<div><b>Response Headers</b><pre class="ptk-code">${escHTML(Object.entries(rec.resHeaders).map(([k,v])=>k+': '+redact(truncateBytes(String(v)))).join('\n'))}</pre></div>`; }
+      if(rec.resBody){ html+=`<div><b>Response Body</b><pre class="ptk-code">${escHTML(redact(truncateBytes(rec.resBody)))}</pre></div>`; }
+      netRefs.details.innerHTML=html; netRefs.details.style.display='';
+      netRefs.details.querySelector('#net_det_close').onclick=()=>{ netRefs.details.style.display='none'; };
+    };
     const pin=document.createElement('button'); pin.className='ptk-btn'; pin.textContent=isPinned(netPins,rec)?'Unpin':'Pin';
     pin.onclick=()=>togglePin(netPins,rec,pin,'net');
     actions.appendChild(copy); actions.appendChild(det); actions.appendChild(pin);
